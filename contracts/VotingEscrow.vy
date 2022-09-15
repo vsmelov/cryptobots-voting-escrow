@@ -37,6 +37,7 @@ struct LockedBalance:
 
 
 interface ERC20:
+    def balanceOf(account: address) -> uint256: view
     def decimals() -> uint256: view
     def name() -> String[64]: view
     def symbol() -> String[32]: view
@@ -112,8 +113,8 @@ slope_changes_keys: public(uint256[100000])  # todo remove
 slope_changes_keys_next_index: public(uint256)
 
 # Aragon's view methods for compatibility
-controller: public(address)
-transfersEnabled: public(bool)
+controller: public(address)  # todo remove never used
+transfersEnabled: public(bool)  # todo remove never used
 
 name: public(String[64])
 symbol: public(String[32])
@@ -127,6 +128,51 @@ smart_wallet_checker: public(address)
 
 admin: public(address)  # Can and will be a smart contract
 future_admin: public(address)
+
+paused: public(bool)
+increase_amount_disabled: public(bool)
+increase_unlock_time_disabled: public(bool)
+create_lock_disabled: public(bool)
+
+event PausedSet:
+    value: bool
+
+event IncreaseAmountDisabledSet:
+    value: bool
+
+event IncreaseUnlockTimeDisabledSet:
+    value: bool
+
+event CreateLockDisabledSet:
+    value: bool
+
+@external
+def set_paused(_value: bool):
+    assert msg.sender == self.admin
+    assert self.paused != _value
+    self.paused = _value
+    log PausedSet(_value)
+
+@external
+def set_create_lock_disabled(_value: bool):
+    assert msg.sender == self.admin
+    assert self.create_lock_disabled != _value
+    self.create_lock_disabled = _value
+    log CreateLockDisabledSet(_value)
+
+@external
+def set_increase_amount_disabled(_value: bool):
+    assert msg.sender == self.admin
+    assert self.increase_amount_disabled != _value
+    self.increase_amount_disabled = _value
+    log IncreaseAmountDisabledSet(_value)
+
+@external
+def set_increase_unlock_time_disabled(_value: bool):
+    assert msg.sender == self.admin
+    assert self.increase_unlock_time_disabled != _value
+    self.increase_unlock_time_disabled = _value
+    log IncreaseUnlockTimeDisabledSet(_value)
 
 
 @external
@@ -443,6 +489,7 @@ def create_lock(_value: uint256, _unlock_time: uint256):
     @param _value Amount to deposit
     @param _unlock_time Epoch time when tokens unlock, rounded down to whole weeks
     """
+    assert not self.create_lock_disabled, "create lock disabled"
     self.assert_not_contract(msg.sender)
     unlock_time: uint256 = (_unlock_time / EPOCH_SECONDS) * EPOCH_SECONDS  # Locktime is rounded down to weeks
     _locked: LockedBalance = self.locked[msg.sender]
@@ -463,6 +510,7 @@ def increase_amount(_value: uint256):
             without modifying the unlock time
     @param _value Amount of tokens to deposit and add to the lock
     """
+    assert not self.increase_amount_disabled, "increase amount disabled"
     self.assert_not_contract(msg.sender)
     _locked: LockedBalance = self.locked[msg.sender]
 
@@ -480,6 +528,7 @@ def increase_unlock_time(_unlock_time: uint256):
     @notice Extend the unlock time for `msg.sender` to `_unlock_time`
     @param _unlock_time New epoch time for unlocking
     """
+    assert not self.increase_unlock_time_disabled, "increase unlock time disabled"
     self.assert_not_contract(msg.sender)
     _locked: LockedBalance = self.locked[msg.sender]
     unlock_time: uint256 = (_unlock_time / EPOCH_SECONDS) * EPOCH_SECONDS  # Locktime is rounded down to weeks
@@ -703,8 +752,8 @@ def changeController(_newController: address):
 
 # original contract - https://etherscan.io/address/0x5f3b5DfEb7B28CDbD7FAba78963EE202a494e2A2
 
-user_claimed_epoch: public(HashMap[address, uint256])  # user -> lastClaimedEpoch
-epoch_rewards: public(HashMap[uint256, uint256])  # epoch -> totalRewardsAmount
+user_token_claimed_epoch: public(HashMap[address, HashMap[address, uint256]])  # user -> token -> lastClaimedEpoch
+epoch_token_rewards: public(HashMap[uint256, HashMap[address, uint256]])  # epoch -> token -> totalRewardsAmount
 
 # inspired by balanceOfAt
 @internal
@@ -905,20 +954,73 @@ def _averageTotalSupplyOverEpoch(_epoch: uint256) -> uint256:
     # )
     return result
 
+# from https://ethereum.stackexchange.com/questions/84775/is-there-a-vyper-equivalent-to-openzeppelins-safeerc20-safetransfer
+@internal
+def safe_transfer(_token: address, _to: address, _value: uint256):
+    _response: Bytes[32] = raw_call(
+        _token,
+        concat(
+            method_id("transfer(address,uint256)"),
+            convert(_to, bytes32),
+            convert(_value, bytes32)
+        ),
+        max_outsize=32
+    )
+    if len(_response) > 0:
+        assert convert(_response, bool), "Transfer failed!"
+
+
+@internal
+def safe_transfer_from(_token: address, _from: address, _to: address, _value: uint256):
+    _response: Bytes[32] = raw_call(
+        _token,
+        concat(
+            method_id("transferFrom(address,address,uint256)"),
+            convert(_from, bytes32),
+            convert(_to, bytes32),
+            convert(_value, bytes32)
+        ),
+        max_outsize=32
+    )
+    if len(_response) > 0:
+        assert convert(_response, bool), "Transfer failed!"
+
+
+event RewardReceived:
+    token: indexed(address)
+    amount: uint256
+    actual_amount: uint256
+
 
 @external
-def receiveReward(amount: uint256):
+@payable
+def receiveNativeReward():
     if (not (
                (self.point_history[self.epoch].ts <= block.timestamp) and
                (block.timestamp < self.point_history[self.epoch].ts + EPOCH_SECONDS)
-    )):  # "checkpoint required"  # todo add checkpoint
+    )):
         self._checkpoint(ZERO_ADDRESS, empty(LockedBalance), empty(LockedBalance))
-    self.epoch_rewards[self.epoch] += amount
-    assert ERC20(self.token).transferFrom(msg.sender, self, amount)
+    self.epoch_token_rewards[self.epoch][ZERO_ADDRESS] += msg.value
+    log RewardReceived(ZERO_ADDRESS, msg.value, msg.value)
+
+
+@external
+def receiveReward(_token: address, amount: uint256):
+    if (not (
+               (self.point_history[self.epoch].ts <= block.timestamp) and
+               (block.timestamp < self.point_history[self.epoch].ts + EPOCH_SECONDS)
+    )):
+        self._checkpoint(ZERO_ADDRESS, empty(LockedBalance), empty(LockedBalance))
+    balance_before: uint256 = ERC20(_token).balanceOf(self)
+    self.safe_transfer_from(_token, msg.sender, self, amount)
+    actual_amount: uint256 = ERC20(_token).balanceOf(self) - balance_before
+    self.epoch_token_rewards[self.epoch][_token] += actual_amount
+    log RewardReceived(_token, amount, actual_amount)
 
 
 event UserRewardsClaimed:
-    user_claimed_epoch: uint256
+    user_claimed_epoch: indexed(uint256)
+    token: indexed(address)
     amount: uint256
 
 
@@ -932,9 +1034,9 @@ event UserRewardsClaimedDebug:
 
 @external
 @view
-def claimable_rewards(user: address = msg.sender) -> uint256:
+def claimable_rewards(_token: address, user: address = msg.sender) -> uint256:
     rewardsAmount: uint256 = 0
-    _user_claimed_epoch: uint256 = self.user_claimed_epoch[user]
+    _user_claimed_epoch: uint256 = self.user_token_claimed_epoch[user][_token]
     currentEpoch: uint256 = self.epoch  # load to memory once
     _epoch: uint256 = _user_claimed_epoch
     for d_epoch in range(255):  #xx 255?
@@ -943,25 +1045,25 @@ def claimable_rewards(user: address = msg.sender) -> uint256:
             break
         _avgUserBlanace: uint256 = self._averageUserBlanaceOverEpoch(user, _epoch)
         _avgTotalSupply: uint256 = self._averageTotalSupplyOverEpoch(_epoch)
-        _epochReward: uint256 = self.epoch_rewards[_epoch]
+        _epochReward: uint256 = self.epoch_token_rewards[_epoch][_token]
         rewardsAmount += _epochReward * _avgUserBlanace / _avgTotalSupply
         log UserRewardsClaimedDebug(_epoch, _avgUserBlanace, _avgTotalSupply, _epochReward, _epochReward * _avgUserBlanace / _avgTotalSupply)
-    log UserRewardsClaimed(_epoch - 1, rewardsAmount)
+    log UserRewardsClaimed(_epoch - 1, _token, rewardsAmount)
     return rewardsAmount
 
 
 #xx todo what if rewards but no locker?
 @external
-def claim_rewards():
+def claim_rewards(_token: address):
     rewardsAmount: uint256 = 0
-    _user_claimed_epoch: uint256 = self.user_claimed_epoch[msg.sender]
+    _user_claimed_epoch: uint256 = self.user_token_claimed_epoch[msg.sender][_token]
     currentEpoch: uint256 = self.epoch  # load to memory once
     _epoch: uint256 = _user_claimed_epoch
     for d_epoch in range(255):  #xx 255?
         _epoch += 1  # move to process the next unprocessed epoch
         if _epoch >= currentEpoch:  # note: we use >= because curerntEpoch is not finalized
             break
-        _epochReward: uint256 = self.epoch_rewards[_epoch]
+        _epochReward: uint256 = self.epoch_token_rewards[_epoch][_token]
         if _epochReward == 0:
             continue  #xx todo event
         _avgUserBlanace: uint256 = self._averageUserBlanaceOverEpoch(msg.sender, _epoch)
@@ -972,6 +1074,11 @@ def claim_rewards():
             continue  #xx todo event
         rewardsAmount += _epochReward * _avgUserBlanace / _avgTotalSupply
         log UserRewardsClaimedDebug(_epoch, _avgUserBlanace, _avgTotalSupply, _epochReward, _epochReward * _avgUserBlanace / _avgTotalSupply)
-    self.user_claimed_epoch[msg.sender] = _epoch - 1
-    assert ERC20(self.token).transfer(msg.sender, rewardsAmount)
-    log UserRewardsClaimed(_epoch - 1, rewardsAmount)
+    self.user_token_claimed_epoch[msg.sender][_token] = _epoch - 1
+
+    if _token == ZERO_ADDRESS:
+        send(msg.sender, rewardsAmount)
+    else:
+        self.safe_transfer(_token, msg.sender, rewardsAmount)
+
+    log UserRewardsClaimed(_epoch - 1, _token, rewardsAmount)
