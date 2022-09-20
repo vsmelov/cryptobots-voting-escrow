@@ -111,6 +111,9 @@ user_point_epoch: public(HashMap[address, uint256])
 slope_changes: public(HashMap[uint256, int128])  # time -> signed slope change
 slope_changes_keys: public(uint256[100000])  # todo remove
 slope_changes_keys_next_index: public(uint256)
+pool_members: public(uint256)  # how many participants are already in the pool
+max_pool_members: public(uint256)  # maximum number of the pool participants
+min_stake_amount: public(uint256)  # min amount to stake (or increase)
 
 # Aragon's view methods for compatibility
 controller: public(address)  # todo remove never used
@@ -129,13 +132,11 @@ smart_wallet_checker: public(address)
 admin: public(address)  # Can and will be a smart contract
 future_admin: public(address)
 
-paused: public(bool)
 increase_amount_disabled: public(bool)
 increase_unlock_time_disabled: public(bool)
 create_lock_disabled: public(bool)
-
-event PausedSet:
-    value: bool
+withdraw_disabled: public(bool)
+emergency: public(bool)  # warning: cannot be reverted!
 
 event IncreaseAmountDisabledSet:
     value: bool
@@ -146,12 +147,35 @@ event IncreaseUnlockTimeDisabledSet:
 event CreateLockDisabledSet:
     value: bool
 
+event WithdrawDisabledSet:
+    value: bool
+
+event MinStakeAmountSet:
+    value: uint256
+
+event Emergency:
+    pass
+
 @external
-def set_paused(_value: bool):
+def enable_emergency():
     assert msg.sender == self.admin
-    assert self.paused != _value
-    self.paused = _value
-    log PausedSet(_value)
+    assert not self.emergency
+    self.emergency = True
+    log Emergency()
+
+@external
+def set_min_stake_amount(_value: uint256):
+    assert msg.sender == self.admin
+    assert self.min_stake_amount != _value
+    self.min_stake_amount = _value
+    log MinStakeAmountSet(_value)
+
+@external
+def set_withdraw_disabled(_value: bool):
+    assert msg.sender == self.admin
+    assert self.withdraw_disabled != _value
+    self.withdraw_disabled = _value
+    log WithdrawDisabledSet(_value)
 
 @external
 def set_create_lock_disabled(_value: bool):
@@ -174,6 +198,45 @@ def set_increase_unlock_time_disabled(_value: bool):
     self.increase_unlock_time_disabled = _value
     log IncreaseUnlockTimeDisabledSet(_value)
 
+@external
+def pause():
+    assert msg.sender == self.admin
+
+    if not self.withdraw_disabled:
+        self.withdraw_disabled = True
+        log WithdrawDisabledSet(True)
+
+    if not self.create_lock_disabled:
+        self.create_lock_disabled = True
+        log CreateLockDisabledSet(True)
+
+    if not self.increase_amount_disabled:
+        self.increase_amount_disabled = True
+        log IncreaseAmountDisabledSet(True)
+
+    if not self.increase_unlock_time_disabled:
+        self.increase_unlock_time_disabled = True
+        log IncreaseUnlockTimeDisabledSet(True)
+
+@external
+def unpause():
+    assert msg.sender == self.admin
+
+    if self.withdraw_disabled:
+        self.withdraw_disabled = False
+        log WithdrawDisabledSet(False)
+
+    if self.create_lock_disabled:
+        self.create_lock_disabled = False
+        log CreateLockDisabledSet(False)
+
+    if self.increase_amount_disabled:
+        self.increase_amount_disabled = False
+        log IncreaseAmountDisabledSet(False)
+
+    if self.increase_unlock_time_disabled:
+        self.increase_unlock_time_disabled = False
+        log IncreaseUnlockTimeDisabledSet(False)
 
 @external
 def __init__(token_addr: address, _name: String[64], _symbol: String[32], _version: String[32]):
@@ -472,11 +535,16 @@ def deposit_for(_addr: address, _value: uint256):
     @param _addr User's wallet address
     @param _value Amount to add to user's lock
     """
+    assert not self.increase_amount_disabled, "increase amount disabled"
+    assert not self.emergency, "not allowed in emergency"
+
     _locked: LockedBalance = self.locked[_addr]
 
     assert _value > 0  # dev: need non-zero value
     assert _locked.amount > 0, "No existing lock found"
     assert _locked.end > block.timestamp, "Cannot add to expired lock. Withdraw"
+
+    assert _value >= self.min_stake_amount, "too small stake amount"
 
     self._deposit_for(_addr, _value, 0, self.locked[_addr], DEPOSIT_FOR_TYPE)
 
@@ -490,11 +558,17 @@ def create_lock(_value: uint256, _unlock_time: uint256):
     @param _unlock_time Epoch time when tokens unlock, rounded down to whole weeks
     """
     assert not self.create_lock_disabled, "create lock disabled"
+    assert not self.emergency, "not allowed in emergency"
+
     self.assert_not_contract(msg.sender)
     unlock_time: uint256 = (_unlock_time / EPOCH_SECONDS) * EPOCH_SECONDS  # Locktime is rounded down to weeks
     _locked: LockedBalance = self.locked[msg.sender]
 
-    assert _value > 0  # dev: need non-zero value
+    self.pool_members += 1
+    assert self.pool_members <= self.max_pool_members, "max_pool_members exceed"
+
+    assert _value > 0, "zero stake not allowed"
+    assert _value >= self.min_stake_amount, "too small stake amount"
     assert _locked.amount == 0, "Withdraw old tokens first"
     assert unlock_time > block.timestamp, "Can only lock until time in the future"
     assert unlock_time <= block.timestamp + MAXTIME, "Voting lock can be 4 years max"
@@ -511,12 +585,16 @@ def increase_amount(_value: uint256):
     @param _value Amount of tokens to deposit and add to the lock
     """
     assert not self.increase_amount_disabled, "increase amount disabled"
+    assert not self.emergency, "not allowed in emergency"
+
     self.assert_not_contract(msg.sender)
     _locked: LockedBalance = self.locked[msg.sender]
 
-    assert _value > 0  # dev: need non-zero value
+    assert _value > 0, "zero stake not allowed"
     assert _locked.amount > 0, "No existing lock found"
     assert _locked.end > block.timestamp, "Cannot add to expired lock. Withdraw"
+
+    assert _value >= self.min_stake_amount, "too small stake amount"
 
     self._deposit_for(msg.sender, _value, 0, _locked, INCREASE_LOCK_AMOUNT)
 
@@ -529,6 +607,8 @@ def increase_unlock_time(_unlock_time: uint256):
     @param _unlock_time New epoch time for unlocking
     """
     assert not self.increase_unlock_time_disabled, "increase unlock time disabled"
+    assert not self.emergency, "not allowed in emergency"
+
     self.assert_not_contract(msg.sender)
     _locked: LockedBalance = self.locked[msg.sender]
     unlock_time: uint256 = (_unlock_time / EPOCH_SECONDS) * EPOCH_SECONDS  # Locktime is rounded down to weeks
@@ -548,6 +628,9 @@ def withdraw():
     @notice Withdraw all tokens for `msg.sender`
     @dev Only possible if the lock has expired
     """
+    assert not self.withdraw_disabled, "withdraw disabled"
+    assert not self.emergency, "not allowed in emergency"
+
     _locked: LockedBalance = self.locked[msg.sender]
     assert block.timestamp >= _locked.end, "The lock didn't expire"
     value: uint256 = convert(_locked.amount, uint256)
@@ -565,6 +648,8 @@ def withdraw():
     self._checkpoint(msg.sender, old_locked, _locked)
 
     assert ERC20(self.token).transfer(msg.sender, value)
+
+    self.pool_members -= 1
 
     log Withdraw(msg.sender, value, block.timestamp)
     log Supply(supply_before, supply_before - value)
@@ -1082,3 +1167,23 @@ def claim_rewards(_token: address):
         self.safe_transfer(_token, msg.sender, rewardsAmount)
 
     log UserRewardsClaimed(_epoch - 1, _token, rewardsAmount)
+
+@external
+def emergency_withdraw(_token: address, _amount: uint256, to: address):
+    assert msg.sender == self.admin
+    if _token == ZERO_ADDRESS:
+        send(to, _amount)
+    else:
+        self.safe_transfer(_token, to, _amount)
+
+@external
+def emergency_withdraw_many(_tokens: address[30], _amounts: uint256[30], tos: address[30]):
+    assert msg.sender == self.admin
+    for i in range(30):
+        _token: address = _tokens[i]
+        _amount: uint256 = _amounts[i]
+        to: address = tos[i]
+        if _token == ZERO_ADDRESS:
+            send(to, _amount)
+        else:
+            self.safe_transfer(_token, to, _amount)
