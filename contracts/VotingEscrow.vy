@@ -540,11 +540,11 @@ def deposit_for(_addr: address, _value: uint256):
 
     _locked: LockedBalance = self.locked[_addr]
 
-    assert _value > 0  # dev: need non-zero value
+    assert _value > 0, "zero stake not allowed"
+    assert _value >= self.min_stake_amount, "too small stake amount"
+
     assert _locked.amount > 0, "No existing lock found"
     assert _locked.end > block.timestamp, "Cannot add to expired lock. Withdraw"
-
-    assert _value >= self.min_stake_amount, "too small stake amount"
 
     self._deposit_for(_addr, _value, 0, self.locked[_addr], DEPOSIT_FOR_TYPE)
 
@@ -569,6 +569,7 @@ def create_lock(_value: uint256, _unlock_time: uint256):
 
     assert _value > 0, "zero stake not allowed"
     assert _value >= self.min_stake_amount, "too small stake amount"
+
     assert _locked.amount == 0, "Withdraw old tokens first"
     assert unlock_time > block.timestamp, "Can only lock until time in the future"
     assert unlock_time <= block.timestamp + MAXTIME, "Voting lock can be 4 years max"
@@ -591,10 +592,10 @@ def increase_amount(_value: uint256):
     _locked: LockedBalance = self.locked[msg.sender]
 
     assert _value > 0, "zero stake not allowed"
+    assert _value >= self.min_stake_amount, "too small stake amount"
+
     assert _locked.amount > 0, "No existing lock found"
     assert _locked.end > block.timestamp, "Cannot add to expired lock. Withdraw"
-
-    assert _value >= self.min_stake_amount, "too small stake amount"
 
     self._deposit_for(msg.sender, _value, 0, _locked, INCREASE_LOCK_AMOUNT)
 
