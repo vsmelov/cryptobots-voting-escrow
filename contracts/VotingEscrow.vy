@@ -104,6 +104,8 @@ supply: public(uint256)
 
 locked: public(HashMap[address, LockedBalance])
 
+aggregated_point_history_per_epoch_seconds: public(HashMap[uint256, uint256])  # timestamp of the epoch start -> aggregated value
+
 epoch: public(uint256)
 point_history: public(Point[100000000000000000000000000000])  # epoch -> unsigned point
 user_point_history: public(HashMap[address, Point[1000000000]])  # user -> Point[user_epoch]
@@ -414,7 +416,7 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
         if t_i > block.timestamp:
             t_i = block.timestamp
         else:
-            d_slope = self.slope_changes[t_i]
+            d_slope = self.slope_changes[t_i]  #xx todo careful!
         last_point.bias -= last_point.slope * convert(t_i - last_checkpoint, int128)
         last_point.slope += d_slope
         if last_point.bias < 0:  # This can happen
@@ -424,6 +426,20 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
         last_checkpoint = t_i
         last_point.ts = t_i
         last_point.blk = initial_last_point.blk + block_slope * (t_i - initial_last_point.ts) / MULTIPLIER
+
+        slope: int128 = last_point.slope
+        start_bias: int128 = last_point.bias
+        end_bias: int128 = start_bias - slope * EPOCH_SECONDS
+        trapezoidArea: uint256 = 0
+        if start_bias < 0:
+            trapezoidArea = 0
+        elif end_bias < 0:
+            end_ts: uint256 = _ts0 + convert(bias / slope, uint256)
+            trapezoidArea = convert(start_bias, uint256) * (end_ts - _ts0) / 2  # triangle
+        else:
+            trapezoidArea = _ts * convert(start_bias + end_bias, uint256) / 2
+        aggregated_point_history_per_epoch_seconds[t_i] = trapezoidArea #xx todo check
+
         _epoch += 1
         if t_i == block.timestamp:
             last_point.blk = block.number
@@ -878,43 +894,6 @@ event _averageUserBlanaceOverEpochDebugS:
     trapezoidArea: uint256
 
 
-# @external
-# @view
-# def _averageUserBlanaceOverEpochView(addr: address, _epoch: uint256) -> uint256:
-#     assert _epoch < self.epoch, "unfnalized epoch"
-#     ts_start: uint256 = self.point_history[_epoch].ts
-#     ts_end: uint256 = self.point_history[_epoch+1].ts
-#
-#     user_epoch_start: uint256 = self._searchForUserEpochByTimestamp(addr, ts_start)
-#     if user_epoch_start == MAX_UINT256:
-#         raise "failed user_epoch_start searchForUserEpochByTimestamp"
-#     user_epoch_end: uint256 = self._searchForUserEpochByTimestamp(addr, ts_end)
-#     if user_epoch_end == MAX_UINT256:
-#         raise "failed user_epoch_end searchForUserEpochByTimestamp"
-#
-#     # todo: check it
-#     areaUnderPolyline: uint256 = 0  # todo think about phantom overflow
-#     user_epoch: uint256 = user_epoch_start
-#     for d_user_epoch in range(256):  # todo be careful here DoS attack!, we may use additional aggregation
-#         if user_epoch > user_epoch_end:  # note: we use > because we want to process the end epoch as well
-#             break
-#         bias: int128 = self.user_point_history[addr][user_epoch].bias
-#         slope: int128 = self.user_point_history[addr][user_epoch].slope
-#         _ts0: uint256 = self.user_point_history[addr][user_epoch].ts
-#         _ts1: uint256 = self.user_point_history[addr][user_epoch+1].ts
-#         if _ts1 == 0:
-#             _ts1 = ts_end
-#
-#         _ts: uint256 = _ts1 - _ts0 + 1  #xx ?? +1
-#         trapezoidArea: uint256 = convert(bias + slope/2, uint256) * _ts  # todo: handle bias + slope/2 < 0
-#         areaUnderPolyline += trapezoidArea
-#
-#         # next iteration
-#         user_epoch += 1
-#
-#     avgBalance: uint256 = areaUnderPolyline / (ts_end - ts_start + 1)
-#     return avgBalance
-
 @internal
 @view
 def _averageUserBlanaceOverEpoch(addr: address, _epoch: uint256) -> uint256:
@@ -998,14 +977,6 @@ def _averageUserBlanaceOverEpoch(addr: address, _epoch: uint256) -> uint256:
     avgBalance: uint256 = areaUnderPolyline / (ts_end - ts_start)
     return avgBalance
 
-event _averageTotalSupplyOverEpoch:
-    _epoch: uint256
-    _ts0: uint256
-    _ts1: uint256
-    bias: int128
-    bias_end: int128
-    slope: int128
-    result: uint256
 
 @internal
 @view
@@ -1029,15 +1000,6 @@ def _averageTotalSupplyOverEpoch(_epoch: uint256) -> uint256:
         trapezoidArea = _ts * convert(bias + end_bias, uint256) / 2
 
     result: uint256 = trapezoidArea / _ts
-    # log _averageTotalSupplyOverEpoch(
-    #     _epoch,
-    #     _ts0,
-    #     _ts1,
-    #     bias,
-    #     end_bias,
-    #     slope,
-    #     result
-    # )
     return result
 
 # from https://ethereum.stackexchange.com/questions/84775/is-there-a-vyper-equivalent-to-openzeppelins-safeerc20-safetransfer
@@ -1145,7 +1107,7 @@ def claim_rewards(_token: address):
     _user_claimed_epoch: uint256 = self.user_token_claimed_epoch[msg.sender][_token]
     currentEpoch: uint256 = self.epoch  # load to memory once
     _epoch: uint256 = _user_claimed_epoch
-    for d_epoch in range(255):  #xx 255?
+    for d_epoch in range(255):  #xx todo 255?
         _epoch += 1  # move to process the next unprocessed epoch
         if _epoch >= currentEpoch:  # note: we use >= because curerntEpoch is not finalized
             break
