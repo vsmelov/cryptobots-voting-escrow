@@ -83,7 +83,6 @@ event Supply:
 
 
 EPOCH_SECONDS: constant(uint256) = 24 * 3600  # all future times are rounded by week
-# EPOCH_SECONDS: constant(uint256) = 600
 MAXTIME: constant(uint256) = 4 * 365 * 86400  # 4 years
 MULTIPLIER: constant(uint256) = 10 ** 18
 
@@ -104,15 +103,17 @@ supply: public(uint256)
 
 locked: public(HashMap[address, LockedBalance])
 
-aggregated_point_history_per_epoch_seconds: public(HashMap[uint256, uint256])  # timestamp of the epoch start -> aggregated value
+integrated_totalSupply_over_window: public(HashMap[uint256, uint256])  # timestamp of the window start -> aggregated value (assuming checkpoint will not change)
 
 epoch: public(uint256)
 point_history: public(Point[100000000000000000000000000000])  # epoch -> unsigned point
 user_point_history: public(HashMap[address, Point[1000000000]])  # user -> Point[user_epoch]
-user_point_epoch: public(HashMap[address, uint256])
+user_point_epoch: public(HashMap[address, uint256])  # user -> current user epoch (its different scale with just epochs)
 slope_changes: public(HashMap[uint256, int128])  # time -> signed slope change
-slope_changes_keys: public(uint256[100000])  # todo remove
-slope_changes_keys_next_index: public(uint256)
+
+slope_changes_keys: public(uint256[100000])  #xx todo remove
+slope_changes_keys_next_index: public(uint256)  #xx todo remove
+
 pool_members: public(uint256)  # how many participants are already in the pool
 max_pool_members: public(uint256)  # maximum number of the pool participants
 min_stake_amount: public(uint256)  # min amount to stake (or increase)
@@ -140,6 +141,9 @@ create_lock_disabled: public(bool)
 withdraw_disabled: public(bool)
 emergency: public(bool)  # warning: cannot be reverted!
 
+user_token_claimed_window: public(HashMap[address, HashMap[address, uint256]])  # user -> token -> last claimed window
+window_token_rewards: public(HashMap[uint256, HashMap[address, uint256]])  # epoch -> token -> totalRewardsAmount
+
 event IncreaseAmountDisabledSet:
     value: bool
 
@@ -157,6 +161,11 @@ event MinStakeAmountSet:
 
 event Emergency:
     pass
+
+event TransferNative:
+    to: indexed(address)
+    value: uint256
+
 
 @external
 def enable_emergency():
@@ -427,18 +436,45 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
         last_point.ts = t_i
         last_point.blk = initial_last_point.blk + block_slope * (t_i - initial_last_point.ts) / MULTIPLIER
 
-        slope: int128 = last_point.slope
-        start_bias: int128 = last_point.bias
-        end_bias: int128 = start_bias - slope * EPOCH_SECONDS
-        trapezoidArea: uint256 = 0
-        if start_bias < 0:
-            trapezoidArea = 0
-        elif end_bias < 0:
-            end_ts: uint256 = _ts0 + convert(bias / slope, uint256)
-            trapezoidArea = convert(start_bias, uint256) * (end_ts - _ts0) / 2  # triangle
-        else:
-            trapezoidArea = _ts * convert(start_bias + end_bias, uint256) / 2
-        aggregated_point_history_per_epoch_seconds[t_i] = trapezoidArea #xx todo check
+
+        if last_checkpoint / EPOCH_SECONDS * EPOCH_SECONDS < t_i / EPOCH_SECONDS * EPOCH_SECONDS:
+            _window: uint256 = last_checkpoint / EPOCH_SECONDS * EPOCH_SECONDS
+            for i in range(255):
+                pass
+
+            # process current  xx
+            _currentWindow: uint256 = block.timestamp / EPOCH_SECONDS * EPOCH_SECONDS
+            slope: int128 = last_point.slope
+            start_bias: int128 = last_point.bias
+            end_bias: int128 = start_bias - slope * EPOCH_SECONDS
+            trapezoidArea: uint256 = 0
+            if start_bias < 0:
+                trapezoidArea = 0
+            elif end_bias < 0:
+                longevity: uint256 = convert(bias / slope, uint256)
+                trapezoidArea = convert(start_bias, uint256) * longevity / 2  # triangle
+            else:
+                trapezoidArea = EPOCH_SECONDS * convert(start_bias + end_bias, uint256) / 2
+            integrated_totalSupply_over_window[t_i] = trapezoidArea  # xx todo check
+
+        elif last_checkpoint / EPOCH_SECONDS * EPOCH_SECONDS == t_i / EPOCH_SECONDS * EPOCH_SECONDS:
+            _ts0: uint256 = last_checkpoint
+
+            # _ts1 = min(window.end, now)
+            _ts1: uint256 = min(
+                t_i / EPOCH_SECONDS * EPOCH_SECONDS + EPOCH_SECONDS,
+                block.timestamp
+            )
+
+            integrated_totalSupply_over_window[t_i] += anyTrapezoidArea(
+                last_checkpoint,
+                last_point.bias,
+                last_point.slope,
+                _ts0,
+                _ts1
+            )
+        else:  # last_checkpoint / EPOCH_SECONDS * EPOCH_SECONDS > t_i / EPOCH_SECONDS * EPOCH_SECONDS
+            raise "impossible state"
 
         _epoch += 1
         if t_i == block.timestamp:
@@ -851,11 +887,7 @@ def changeController(_newController: address):
 
 
 # Rewards
-
 # original contract - https://etherscan.io/address/0x5f3b5DfEb7B28CDbD7FAba78963EE202a494e2A2
-
-user_token_claimed_epoch: public(HashMap[address, HashMap[address, uint256]])  # user -> token -> lastClaimedEpoch
-epoch_token_rewards: public(HashMap[uint256, HashMap[address, uint256]])  # epoch -> token -> totalRewardsAmount
 
 # inspired by balanceOfAt
 @internal
@@ -880,11 +912,11 @@ def _searchForUserEpochByTimestamp(addr: address, ts: uint256) -> uint256:
             _max = _mid - 1
     return _min
 
-event _averageUserBlanaceOverEpochDebug:
+event _averageUserBlanaceOverWindowDebug:
     user_epoch_start: uint256
     user_epoch_end: uint256
 
-event _averageUserBlanaceOverEpochDebugS:
+event _averageUserBlanaceOverWindowDebugS:
     user_epoch: uint256
     bias: int128
     slope: int128
@@ -893,13 +925,33 @@ event _averageUserBlanaceOverEpochDebugS:
     _ts: uint256
     trapezoidArea: uint256
 
+@internal
+@view
+def anyTrapezoidArea(
+        _bias_ts: uint256,
+        _bias: int128,
+        _slope: int128,
+        _ts0: uint256,
+        _ts1: uint256
+) -> uint256:
+    _ts: uint256 = _ts1 - _ts0
+    start_bias: int128 = bias - slope * convert(_ts0 - _ts_begin, int128)
+    end_bias: int128 = bias - slope * convert(_ts1 - _ts_begin, int128)
+    if start_bias < 0:
+        return 0
+    elif end_bias < 0:
+        end_ts: uint256 = _ts0 + convert(bias / slope, uint256)
+        return convert(start_bias, uint256) * (end_ts - _ts0) / 2  # triangle
+    else:
+        return _ts * convert(start_bias + end_bias, uint256) / 2  # trapezoid
+
 
 @internal
 @view
-def _averageUserBlanaceOverEpoch(addr: address, _epoch: uint256) -> uint256:
-    assert _epoch < self.epoch, "unfnalized epoch"  # typo
-    ts_start: uint256 = self.point_history[_epoch].ts
-    ts_end: uint256 = self.point_history[_epoch+1].ts
+def _averageUserBlanaceOverWindow(addr: address, _window: uint256) -> uint256:
+    assert _window < (block.timestamp / EPOCH_SECONDS * EPOCH_SECONDS), "unfinalized epoch"
+    ts_start: uint256 = _window
+    ts_end: uint256 = _window + EPOCH_SECONDS
 
     user_epoch_start: uint256 = self._searchForUserEpochByTimestamp(addr, ts_start)
     if user_epoch_start == MAX_UINT256:
@@ -929,24 +981,12 @@ def _averageUserBlanaceOverEpoch(addr: address, _epoch: uint256) -> uint256:
         if _ts0 < ts_start:
             _ts0 = ts_start
 
-        _ts: uint256 = _ts1 - _ts0
-        start_bias: int128 = bias - slope * convert(_ts0 - _ts_begin, int128)
-        end_bias: int128 = bias - slope * convert(_ts1 - _ts_begin, int128)
-
-        trapezoidArea: uint256 = 0
-        if start_bias < 0:
-            trapezoidArea = 0
-        elif end_bias < 0:
-            end_ts: uint256 = _ts0 + convert(bias / slope, uint256)
-            trapezoidArea = convert(start_bias, uint256) * (end_ts - _ts0) / 2  # triangle
-        else:
-            trapezoidArea = _ts * convert(start_bias + end_bias, uint256) / 2
-
+        trapezoidArea: uint256 = anyTrapezoidArea(_ts_begin, bias, slope, _ts0, _ts1)
         areaUnderPolyline += trapezoidArea
 
         if ts_end == ts_start:  #xx todo discuss
             assert user_epoch_start == user_epoch_end
-            log _averageUserBlanaceOverEpochDebugS(
+            log _averageUserBlanaceOverWindowDebugS(
                 user_epoch,
                 bias,
                 slope,
@@ -955,11 +995,11 @@ def _averageUserBlanaceOverEpoch(addr: address, _epoch: uint256) -> uint256:
                 _ts,
                 0
             )
-            log _averageUserBlanaceOverEpochDebug(user_epoch_start, user_epoch_end)
+            log _averageUserBlanaceOverWindowDebug(user_epoch_start, user_epoch_end)
             return convert(start_bias, uint256)
 
 
-        log _averageUserBlanaceOverEpochDebugS(
+        log _averageUserBlanaceOverWindowDebugS(
             user_epoch,
             bias,
             slope,
@@ -972,7 +1012,7 @@ def _averageUserBlanaceOverEpoch(addr: address, _epoch: uint256) -> uint256:
         # next iteration
         user_epoch += 1
 
-    log _averageUserBlanaceOverEpochDebug(user_epoch_start, user_epoch_end)
+    log _averageUserBlanaceOverWindowDebug(user_epoch_start, user_epoch_end)
 
     avgBalance: uint256 = areaUnderPolyline / (ts_end - ts_start)
     return avgBalance
@@ -980,27 +1020,45 @@ def _averageUserBlanaceOverEpoch(addr: address, _epoch: uint256) -> uint256:
 
 @internal
 @view
-def _averageTotalSupplyOverEpoch(_epoch: uint256) -> uint256:
-    assert _epoch < self.epoch, "incorrect epoch"
-    _ts0: uint256 = self.point_history[_epoch].ts
-    _ts1: uint256 = self.point_history[_epoch+1].ts
-    bias: int128 = self.point_history[_epoch].bias
-    slope: int128 = self.point_history[_epoch].slope
-
-    if _ts0 == _ts1:
-        return convert(bias, uint256)
-
-    _ts: uint256 = _ts1 - _ts0
-    end_bias: int128 = bias - slope * convert(_ts, int128)
+def _averageTotalSupplyOverWindow(_window: uint256) -> uint256:
+    assert _window < (block.timestamp / EPOCH_SECONDS * EPOCH_SECONDS), "incorrect window"
     trapezoidArea: uint256 = 0
-    if end_bias < 0:
-        end_ts: uint256 = _ts0 + convert(bias / slope, uint256)
-        trapezoidArea = convert(bias, uint256) * (end_ts - _ts0) / 2  # triangle
-    else:
-        trapezoidArea = _ts * convert(bias + end_bias, uint256) / 2
+    if self.point_history[_epoch].ts < _window:
+        _ts0: uint256 = _window
+        _ts1: uint256 = _window + EPOCH_SECONDS
+        _ts: uint256 = _ts1 - _ts0
 
-    result: uint256 = trapezoidArea / _ts
-    return result
+        bias: int128 = self.point_history[_epoch].bias
+        slope: int128 = self.point_history[_epoch].slope
+        bias = bias - slope * (_window - self.point_history[_epoch].ts)
+
+        end_bias: int128 = bias - slope * convert(_ts, int128)
+        if end_bias < 0:
+            end_ts: uint256 = _ts0 + convert(bias / slope, uint256)
+            trapezoidArea = convert(bias, uint256) * (end_ts - _ts0) / 2  # triangle
+        else:
+            trapezoidArea = _ts * convert(bias + end_bias, uint256) / 2
+    elif self.point_history[_epoch].ts < _window + EPOCH_SECONDS:
+        _ts0: uint256 = self.point_history[_epoch].ts
+        _ts1: uint256 = _window + EPOCH_SECONDS
+        _ts: uint256 = _ts1 - _ts0
+
+        bias: int128 = self.point_history[_epoch].bias
+        slope: int128 = self.point_history[_epoch].slope
+        bias = bias - slope * (_window - self.point_history[_epoch].ts)
+
+        end_bias: int128 = bias - slope * convert(_ts, int128)
+        if end_bias < 0:
+            end_ts: uint256 = _ts0 + convert(bias / slope, uint256)
+            trapezoidArea = convert(bias, uint256) * (end_ts - _ts0) / 2  # triangle
+        else:
+            trapezoidArea = _ts * convert(bias + end_bias, uint256) / 2
+        trapezoidArea += integrated_totalSupply_over_window[_window]
+    else: # _window + EPOCH_SECONDS <= self.point_history[_epoch].ts
+        trapezoidArea = integrated_totalSupply_over_window[_window]
+
+    return trapezoidArea / EPOCH_SECONDS
+
 
 # from https://ethereum.stackexchange.com/questions/84775/is-there-a-vyper-equivalent-to-openzeppelins-safeerc20-safetransfer
 @internal
@@ -1048,7 +1106,7 @@ def receiveNativeReward():
                (block.timestamp < self.point_history[self.epoch].ts + EPOCH_SECONDS)
     )):
         self._checkpoint(ZERO_ADDRESS, empty(LockedBalance), empty(LockedBalance))
-    self.epoch_token_rewards[self.epoch][ZERO_ADDRESS] += msg.value
+    self.window_token_rewards[self.epoch][ZERO_ADDRESS] += msg.value
     log RewardReceived(ZERO_ADDRESS, msg.value, msg.value)
 
 
@@ -1062,7 +1120,7 @@ def receiveReward(_token: address, amount: uint256):
     balance_before: uint256 = ERC20(_token).balanceOf(self)
     self.safe_transfer_from(_token, msg.sender, self, amount)
     actual_amount: uint256 = ERC20(_token).balanceOf(self) - balance_before
-    self.epoch_token_rewards[self.epoch][_token] += actual_amount
+    self.window_token_rewards[self.epoch][_token] += actual_amount
     log RewardReceived(_token, amount, actual_amount)
 
 
@@ -1079,69 +1137,83 @@ event UserRewardsClaimedDebug:
     _epochReward: uint256
     _userEpochReward: uint256
 
+@external
+@view
+def currentWindow() -> uint256:
+    block.timestamp / EPOCH_SECONDS * EPOCH_SECONDS
+
 
 @external
 @view
 def claimable_rewards(_token: address, user: address = msg.sender) -> uint256:
     rewardsAmount: uint256 = 0
-    _user_claimed_epoch: uint256 = self.user_token_claimed_epoch[user][_token]
-    currentEpoch: uint256 = self.epoch  # load to memory once
-    _epoch: uint256 = _user_claimed_epoch
+    _user_claimed_window: uint256 = self.user_token_claimed_window[user][_token]
+    currentWindow: uint256 = block.timestamp / EPOCH_SECONDS * EPOCH_SECONDS
+    _window: uint256 = _user_claimed_window
     for d_epoch in range(255):  #xx 255?
-        _epoch += 1  # move to process the next unprocessed epoch
-        if _epoch >= currentEpoch:  # note: we use >= because currentEpoch is not finalized
+        _window += EPOCH_SECONDS  # move to process the next unprocessed widnow
+        if _window >= currentWindow:  # note: we use >= because currentWindow is not finalized
             break
-        _avgUserBlanace: uint256 = self._averageUserBlanaceOverEpoch(user, _epoch)
-        _avgTotalSupply: uint256 = self._averageTotalSupplyOverEpoch(_epoch)
-        _epochReward: uint256 = self.epoch_token_rewards[_epoch][_token]
-        rewardsAmount += _epochReward * _avgUserBlanace / _avgTotalSupply
-        log UserRewardsClaimedDebug(_epoch, _avgUserBlanace, _avgTotalSupply, _epochReward, _epochReward * _avgUserBlanace / _avgTotalSupply)
-    log UserRewardsClaimed(_epoch - 1, _token, rewardsAmount)
+        _avgUserBlanace: uint256 = self._averageUserBlanaceOverWindow(user, _epoch)
+        _avgTotalSupply: uint256 = integrated_totalSupply_over_window[_window] / EPOCH_SECONDS
+        _windowReward: uint256 = self.window_token_rewards[_epoch][_token]
+        _thisWindowUserReward: uint256 = _windowReward * _avgUserBlanace / _avgTotalSupply
+        rewardsAmount += _thisWindowUserReward
     return rewardsAmount
 
 
-#xx todo what if rewards but no locker?
+#xx todo what if rewards but no staker user?
 @external
 def claim_rewards(_token: address):
     rewardsAmount: uint256 = 0
-    _user_claimed_epoch: uint256 = self.user_token_claimed_epoch[msg.sender][_token]
-    currentEpoch: uint256 = self.epoch  # load to memory once
-    _epoch: uint256 = _user_claimed_epoch
+    _user_claimed_window: uint256 = self.user_token_claimed_window[msg.sender][_token]
+    _currentWindow: uint256 = block.timestamp / EPOCH_SECONDS * EPOCH_SECONDS
+    _window: uint256 = _user_claimed_window
     for d_epoch in range(255):  #xx todo 255?
-        _epoch += 1  # move to process the next unprocessed epoch
-        if _epoch >= currentEpoch:  # note: we use >= because curerntEpoch is not finalized
+        _window += EPOCH_SECONDS  # move to process the next unprocessed epoch
+        if _window >= _currentWindow:  # note: we use >= because curerntEpoch is not finalized
             break
-        _epochReward: uint256 = self.epoch_token_rewards[_epoch][_token]
-        if _epochReward == 0:
+        _windowReward: uint256 = self.window_token_rewards[_window][_token]
+        if _windowReward == 0:
             continue  #xx todo event
-        _avgUserBlanace: uint256 = self._averageUserBlanaceOverEpoch(msg.sender, _epoch)
+        _avgUserBlanace: uint256 = self._averageUserBlanaceOverWindow(msg.sender, _window)
         if _avgUserBlanace == 0:
             continue  #xx todo event
-        _avgTotalSupply: uint256 = self._averageTotalSupplyOverEpoch(_epoch)
+        _avgTotalSupply: uint256 = self._averageTotalSupplyOverWindow(_epoch)
         if _avgTotalSupply == 0:
             continue  #xx todo event
         rewardsAmount += _epochReward * _avgUserBlanace / _avgTotalSupply
         log UserRewardsClaimedDebug(_epoch, _avgUserBlanace, _avgTotalSupply, _epochReward, _epochReward * _avgUserBlanace / _avgTotalSupply)
     self.user_token_claimed_epoch[msg.sender][_token] = _epoch - 1
 
-    if _token == ZERO_ADDRESS:
-        send(msg.sender, rewardsAmount)
-    else:
-        self.safe_transfer(_token, msg.sender, rewardsAmount)
-
+    any_transfer(_token, msg.sender, rewardsAmount)
     log UserRewardsClaimed(_epoch - 1, _token, rewardsAmount)
+
+
+@internal
+def any_transfer(_token: address, _to: address, _value: uint256):
+    if _token == ZERO_ADDRESS:
+        send(_to, _value)
+        log TransferNative(_to, _value)
+    else:
+        self.safe_transfer(_token, _to, _value)
+
+# emergency
 
 @external
 def emergency_withdraw(_token: address, _amount: uint256, to: address):
     assert msg.sender == self.admin
+    assert self.emergency, "not in emergency mode"
     if _token == ZERO_ADDRESS:
         send(to, _amount)
     else:
         self.safe_transfer(_token, to, _amount)
 
+
 @external
 def emergency_withdraw_many(_tokens: address[30], _amounts: uint256[30], tos: address[30]):
     assert msg.sender == self.admin
+    assert self.emergency, "not in emergency mode"
     for i in range(30):
         _token: address = _tokens[i]
         _amount: uint256 = _amounts[i]
