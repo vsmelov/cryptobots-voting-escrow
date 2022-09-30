@@ -98,6 +98,16 @@ def EPOCH_SECONDS() -> uint256:
 def MAXTIME() -> uint256:
     return MAXTIME
 
+last_manual_checkpoint_timestamp: public(uint256)
+min_delay_between_manual_checkpoint: public(uint256)
+
+event MinDelayBetweenManualCheckpointSet:
+    value: uint256
+
+@external
+def set_min_delay_between_manual_checkpoint(value: uint256):
+    assert msg.sender == self.admin, "not admin"
+    assert self.last_manual_checkpoint_timestamp != value, "not changed"
 
 token: public(address)
 supply: public(uint256)
@@ -271,7 +281,7 @@ def commit_transfer_ownership(addr: address):
     @notice Transfer ownership of VotingEscrow contract to `addr`
     @param addr Address to have ownership transferred to
     """
-    assert msg.sender == self.admin  # dev: admin only
+    assert msg.sender == self.admin, "not admin"  # dev: admin only
     self.future_admin = addr
     log CommitOwnership(addr)
 
@@ -281,7 +291,7 @@ def apply_transfer_ownership():
     """
     @notice Apply ownership transfer
     """
-    assert msg.sender == self.admin  # dev: admin only
+    assert msg.sender == self.admin, "not admin"  # dev: admin only
     _admin: address = self.future_admin
     assert _admin != ZERO_ADDRESS  # dev: admin not set
     self.admin = _admin
@@ -294,7 +304,7 @@ def commit_smart_wallet_checker(addr: address):
     @notice Set an external contract to check for approved smart contract wallets
     @param addr Address of Smart contract checker
     """
-    assert msg.sender == self.admin
+    assert msg.sender == self.admin, "not admin"
     self.future_smart_wallet_checker = addr
 
 
@@ -303,7 +313,7 @@ def apply_smart_wallet_checker():
     """
     @notice Apply setting external contract to check approved smart contract wallets
     """
-    assert msg.sender == self.admin
+    assert msg.sender == self.admin, "not admin"
     self.smart_wallet_checker = self.future_smart_wallet_checker
 
 
