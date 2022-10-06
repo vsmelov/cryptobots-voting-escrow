@@ -87,15 +87,15 @@ brownie test -v -R
 ```
 
 ```bash
-export BRAVE_MAIN_PASS='...'
 rm -rf build
 brownie compile
-brownie run scripts/deployment/vebits/deploy_vebits.py --network rinkeby
-export TOKEN_ADDRESS='0x29052De5b88EC93A80869affFf567C8B10F7d45B'
-export VOTING_ESCROW_ADDRESS='0x77A2EF40D469219D10191fc25007149b5498eA94'
-brownie run scripts/deployment/vebits/deposit_vebits.py --network rinkeby
-brownie run scripts/deployment/vebits/transfer_reward.py --network rinkeby
-brownie run scripts/deployment/vebits/claim_rewards.py --network rinkeby
+export NETWORK="polygon-test"
+brownie run scripts/deployment/vebits/deploy_vebits.py --network $NETWORK
+export TOKEN_ADDRESS='0x6727Dc8B3aBedC1D2C5E17d99FB690b0A7DaE0E2'  # change
+export VOTING_ESCROW_ADDRESS='0x835d18D9c4966e12b7f47C2a1e08c1A7959DE186'  # change
+brownie run scripts/deployment/vebits/deposit_vebits.py --network $NETWORK
+brownie run scripts/deployment/vebits/transfer_reward.py --network $NETWORK
+brownie run scripts/deployment/vebits/claim_rewards.py --network $NETWORK
 ```
 
 ### Deployment

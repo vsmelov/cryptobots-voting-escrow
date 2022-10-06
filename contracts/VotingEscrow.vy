@@ -1,4 +1,4 @@
-# @version 0.2.4
+# @version 0.3.7
 """
 @title Voting Escrow
 @author Curve Finance
@@ -53,17 +53,20 @@ interface ERC20:
 interface SmartWalletChecker:
     def check(addr: address) -> bool: nonpayable
 
+storageUInt256: HashMap[bytes32, uint256]
+storageAddress: HashMap[bytes32, address]
+storageBool: HashMap[bytes32, bool]
+
+
 DEPOSIT_FOR_TYPE: constant(int128) = 0
 CREATE_LOCK_TYPE: constant(int128) = 1
 INCREASE_LOCK_AMOUNT: constant(int128) = 2
 INCREASE_UNLOCK_TIME: constant(int128) = 3
 
 
-event CommitOwnership:
+event TransferOwnership:
     admin: address
 
-event ApplyOwnership:
-    admin: address
 
 event Deposit:
     provider: indexed(address)
@@ -72,10 +75,12 @@ event Deposit:
     type: int128
     ts: uint256
 
+
 event Withdraw:
     provider: indexed(address)
     value: uint256
     ts: uint256
+
 
 event Supply:
     prevSupply: uint256
@@ -98,19 +103,43 @@ def EPOCH_SECONDS() -> uint256:
 def MAXTIME() -> uint256:
     return MAXTIME
 
+settings: public(address)
+
+ADMIN_HASH: constant(bytes32) = keccak256("admin")
+@external
+@view
+def admin() -> address:
+    return self._admin()
+
+@internal
+@view
+def _admin() -> address:
+    return self.storageAddress[ADMIN_HASH]
+
+
 last_manual_checkpoint_timestamp: public(uint256)
-min_delay_between_manual_checkpoint: public(uint256)
+MIN_DELAY_BETWEEN_MANUAL_CHECKPOINT_HASH: constant(bytes32) = keccak256("min_delay_between_manual_checkpoint")
+
+@external
+@view
+def min_delay_between_manual_checkpoint() -> uint256:
+    return self._min_delay_between_manual_checkpoint()
+
+@internal
+@view
+def _min_delay_between_manual_checkpoint() -> uint256:
+    return self.storageUInt256[MIN_DELAY_BETWEEN_MANUAL_CHECKPOINT_HASH]
 
 event MinDelayBetweenManualCheckpointSet:
     value: uint256
 
-# todo uncomment
-# @external
-# def set_min_delay_between_manual_checkpoint(_value: uint256):
-#     assert msg.sender == self.admin, "not admin"
-#     assert self.last_manual_checkpoint_timestamp != _value, "not changed"
-#     self.last_manual_checkpoint_timestamp = _value
-#     log MinDelayBetweenManualCheckpointSet(_value)
+@external
+def set_min_delay_between_manual_checkpoint(_value: uint256):
+    raw_call(
+        self.settings,
+        _abi_encode(_value, method_id=method_id("set_min_delay_between_manual_checkpoint(uint256)")),
+        is_delegate_call=True
+    )
 
 token: public(address)
 supply: public(uint256)
@@ -139,11 +168,7 @@ decimals: public(uint256)
 
 # Checker for whitelisted (smart contract) wallets which are allowed to deposit
 # The goal is to prevent tokenizing the escrow
-future_smart_wallet_checker: public(address)
 smart_wallet_checker: public(address)
-
-admin: public(address)  # Can and will be a smart contract
-future_admin: public(address)
 
 increase_amount_disabled: public(bool)
 increase_unlock_time_disabled: public(bool)
@@ -172,61 +197,66 @@ event MaxPoolMembersSet:
 event Emergency:
     pass
 
-# todo uncomment
-# @external
-# def enable_emergency():
-#     assert msg.sender == self.admin
-#     assert not self.emergency
-#     self.emergency = True
-#     log Emergency()
 
-# todo uncomment
-# @external
-# def set_max_pool_members(_value: uint256):
-#     assert msg.sender == self.admin
-#     assert self.max_pool_members != _value
-#     self.max_pool_members = _value
-#     log MaxPoolMembersSet(_value)
+@external
+def enable_emergency():
+    assert msg.sender == self._admin()
+    assert not self.emergency
+    self.emergency = True
+    log Emergency()
 
-# todo uncomment
-# @external
-# def set_min_stake_amount(_value: uint256):
-#     assert msg.sender == self.admin
-#     assert self.min_stake_amount != _value
-#     self.min_stake_amount = _value
-#     log MinStakeAmountSet(_value)
+
+@external
+def set_max_pool_members(_value: uint256):
+    assert msg.sender == self._admin()
+    assert self.max_pool_members != _value
+    self.max_pool_members = _value
+    log MaxPoolMembersSet(_value)
+
+
+@external
+def set_min_stake_amount(_value: uint256):
+    assert msg.sender == self._admin()
+    assert self.min_stake_amount != _value
+    self.min_stake_amount = _value
+    log MinStakeAmountSet(_value)
+
 
 @external
 def set_withdraw_disabled(_value: bool):
-    assert msg.sender == self.admin
+    assert msg.sender == self._admin()
     assert self.withdraw_disabled != _value
     self.withdraw_disabled = _value
     log WithdrawDisabledSet(_value)
 
+
 @external
 def set_create_lock_disabled(_value: bool):
-    assert msg.sender == self.admin
+    assert msg.sender == self._admin()
     assert self.create_lock_disabled != _value
     self.create_lock_disabled = _value
     log CreateLockDisabledSet(_value)
 
+
 @external
 def set_increase_amount_disabled(_value: bool):
-    assert msg.sender == self.admin
+    assert msg.sender == self._admin()
     assert self.increase_amount_disabled != _value
     self.increase_amount_disabled = _value
     log IncreaseAmountDisabledSet(_value)
 
+
 @external
 def set_increase_unlock_time_disabled(_value: bool):
-    assert msg.sender == self.admin
+    assert msg.sender == self._admin()
     assert self.increase_unlock_time_disabled != _value
     self.increase_unlock_time_disabled = _value
     log IncreaseUnlockTimeDisabledSet(_value)
 
+
 @external
 def pause():
-    assert msg.sender == self.admin
+    assert msg.sender == self._admin()
 
     if not self.withdraw_disabled:
         self.withdraw_disabled = True
@@ -244,9 +274,10 @@ def pause():
         self.increase_unlock_time_disabled = True
         log IncreaseUnlockTimeDisabledSet(True)
 
+
 @external
 def unpause():
-    assert msg.sender == self.admin
+    assert msg.sender == self._admin()
 
     if self.withdraw_disabled:
         self.withdraw_disabled = False
@@ -264,8 +295,10 @@ def unpause():
         self.increase_unlock_time_disabled = False
         log IncreaseUnlockTimeDisabledSet(False)
 
+
 @external
 def __init__(
+        settings_addr: address,
         token_addr: address,
         _name: String[64],
         _symbol: String[32],
@@ -275,12 +308,14 @@ def __init__(
 ):
     """
     @notice Contract constructor
+    @param settings_addr VotingEscrowSettings address
     @param token_addr `ERC20CRV` token address
     @param _name Token name
     @param _symbol Token symbol
     @param _version Contract version - required for Aragon compatibility
     """
-    self.admin = msg.sender
+    self.settings = settings_addr
+    self.storageAddress[ADMIN_HASH] = msg.sender
     self.token = token_addr
     self.point_history[0].blk = block.number
     self.point_history[0].ts = block.timestamp
@@ -302,45 +337,25 @@ def __init__(
 
 
 @external
-def commit_transfer_ownership(addr: address):
+def transfer_ownership(addr: address):
     """
     @notice Transfer ownership of VotingEscrow contract to `addr`
     @param addr Address to have ownership transferred to
     """
-    assert msg.sender == self.admin, "not admin"  # dev: admin only
-    self.future_admin = addr
-    log CommitOwnership(addr)
+    raw_call(
+        self.settings,
+        _abi_encode(addr, method_id=method_id("transfer_ownership(address)")),
+        is_delegate_call=True
+    )
 
 
 @external
-def apply_transfer_ownership():
-    """
-    @notice Apply ownership transfer
-    """
-    assert msg.sender == self.admin, "not admin"  # dev: admin only
-    _admin: address = self.future_admin
-    assert _admin != ZERO_ADDRESS  # dev: admin not set
-    self.admin = _admin
-    log ApplyOwnership(_admin)
-
-
-@external
-def commit_smart_wallet_checker(addr: address):
-    """
-    @notice Set an external contract to check for approved smart contract wallets
-    @param addr Address of Smart contract checker
-    """
-    assert msg.sender == self.admin, "not admin"
-    self.future_smart_wallet_checker = addr
-
-
-@external
-def apply_smart_wallet_checker():
+def set_smart_wallet_checker(addr: address):
     """
     @notice Apply setting external contract to check approved smart contract wallets
     """
-    assert msg.sender == self.admin, "not admin"
-    self.smart_wallet_checker = self.future_smart_wallet_checker
+    assert msg.sender == self._admin(), "not admin"
+    self.smart_wallet_checker = addr
 
 
 @internal
@@ -410,10 +425,10 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
         # Calculate slopes and biases
         # Kept at zero when they have to
         if old_locked.end > block.timestamp and old_locked.amount > 0:
-            u_old.slope = old_locked.amount / MAXTIME  # todo why??
+            u_old.slope = old_locked.amount / convert(MAXTIME, int128)  # todo why??
             u_old.bias = u_old.slope * convert(old_locked.end - block.timestamp, int128)
         if new_locked.end > block.timestamp and new_locked.amount > 0:
-            u_new.slope = new_locked.amount / MAXTIME
+            u_new.slope = new_locked.amount / convert(MAXTIME, int128)
             u_new.bias = u_new.slope * convert(new_locked.end - block.timestamp, int128)
 
         # Read values of scheduled changes in the slope
@@ -558,6 +573,9 @@ def checkpoint():
     """
     @notice Record global data to checkpoint
     """
+    delay: uint256 = block.timestamp - self.last_manual_checkpoint_timestamp
+    assert delay >= self._min_delay_between_manual_checkpoint(), "min delay failed"
+    self.last_manual_checkpoint_timestamp = block.timestamp
     self._checkpoint(ZERO_ADDRESS, empty(LockedBalance), empty(LockedBalance))
 
 
@@ -872,8 +890,6 @@ def changeController(_newController: address):
 
 # Rewards
 
-# original contract - https://etherscan.io/address/0x5f3b5DfEb7B28CDbD7FAba78963EE202a494e2A2
-
 user_token_claimed_epoch: public(HashMap[address, HashMap[address, uint256]])  # user -> token -> lastClaimedEpoch
 epoch_token_rewards: public(HashMap[uint256, HashMap[address, uint256]])  # epoch -> token -> totalRewardsAmount
 
@@ -913,43 +929,6 @@ event _averageUserBlanaceOverEpochDebugS:
     _ts: uint256
     trapezoidArea: uint256
 
-
-# @external
-# @view
-# def _averageUserBlanaceOverEpochView(addr: address, _epoch: uint256) -> uint256:
-#     assert _epoch < self.epoch, "unfnalized epoch"
-#     ts_start: uint256 = self.point_history[_epoch].ts
-#     ts_end: uint256 = self.point_history[_epoch+1].ts
-#
-#     user_epoch_start: uint256 = self._searchForUserEpochByTimestamp(addr, ts_start)
-#     if user_epoch_start == MAX_UINT256:
-#         raise "failed user_epoch_start searchForUserEpochByTimestamp"
-#     user_epoch_end: uint256 = self._searchForUserEpochByTimestamp(addr, ts_end)
-#     if user_epoch_end == MAX_UINT256:
-#         raise "failed user_epoch_end searchForUserEpochByTimestamp"
-#
-#     # todo: check it
-#     areaUnderPolyline: uint256 = 0  # todo think about phantom overflow
-#     user_epoch: uint256 = user_epoch_start
-#     for d_user_epoch in range(256):  # todo be careful here DoS attack!, we may use additional aggregation
-#         if user_epoch > user_epoch_end:  # note: we use > because we want to process the end epoch as well
-#             break
-#         bias: int128 = self.user_point_history[addr][user_epoch].bias
-#         slope: int128 = self.user_point_history[addr][user_epoch].slope
-#         _ts0: uint256 = self.user_point_history[addr][user_epoch].ts
-#         _ts1: uint256 = self.user_point_history[addr][user_epoch+1].ts
-#         if _ts1 == 0:
-#             _ts1 = ts_end
-#
-#         _ts: uint256 = _ts1 - _ts0 + 1  #xx ?? +1
-#         trapezoidArea: uint256 = convert(bias + slope/2, uint256) * _ts  # todo: handle bias + slope/2 < 0
-#         areaUnderPolyline += trapezoidArea
-#
-#         # next iteration
-#         user_epoch += 1
-#
-#     avgBalance: uint256 = areaUnderPolyline / (ts_end - ts_start + 1)
-#     return avgBalance
 
 @internal
 @view
@@ -1034,6 +1013,7 @@ def _averageUserBlanaceOverEpoch(addr: address, _epoch: uint256) -> uint256:
     avgBalance: uint256 = areaUnderPolyline / (ts_end - ts_start)
     return avgBalance
 
+
 event _averageTotalSupplyOverEpoch:
     _epoch: uint256
     _ts0: uint256
@@ -1042,6 +1022,7 @@ event _averageTotalSupplyOverEpoch:
     bias_end: int128
     slope: int128
     result: uint256
+
 
 @internal
 @view
@@ -1154,6 +1135,20 @@ event UserRewardsClaimedDebug:
     _userEpochReward: uint256
 
 
+event Log0Args:
+    message: String[256]
+
+
+event Log1Args:
+    message: String[256]
+    value1: uint256
+
+
+event Log2Args:
+    message: String[256]
+    value1: uint256
+
+
 @external
 @view
 def user_token_claimable_rewards(user: address, _token: address) -> uint256:
@@ -1165,9 +1160,18 @@ def user_token_claimable_rewards(user: address, _token: address) -> uint256:
         _epoch += 1  # move to process the next unprocessed epoch
         if _epoch >= currentEpoch:  # note: we use >= because currentEpoch is not finalized
             break
-        _avgUserBlanace: uint256 = self._averageUserBlanaceOverEpoch(user, _epoch)
-        _avgTotalSupply: uint256 = self._averageTotalSupplyOverEpoch(_epoch)
         _epochReward: uint256 = self.epoch_token_rewards[_epoch][_token]
+        if _epochReward == 0:
+            log Log1Args("skip _epoch {0} because _epochReward=0", _epoch)
+            continue
+        _avgUserBlanace: uint256 = self._averageUserBlanaceOverEpoch(user, _epoch)
+        if _avgUserBlanace == 0:
+            log Log1Args("skip _epoch {0} because _avgUserBlanace=0", _epoch)
+            continue
+        _avgTotalSupply: uint256 = self._averageTotalSupplyOverEpoch(_epoch)
+        if _avgTotalSupply == 0:
+            log Log1Args("skip _epoch {0} because _avgTotalSupply=0", _epoch)
+            continue
         rewardsAmount += _epochReward * _avgUserBlanace / _avgTotalSupply
         log UserRewardsClaimedDebug(_epoch, _avgUserBlanace, _avgTotalSupply, _epochReward, _epochReward * _avgUserBlanace / _avgTotalSupply)
     log UserRewardsClaimed(_epoch - 1, _token, rewardsAmount)
@@ -1187,13 +1191,16 @@ def claim_rewards(_token: address):
             break
         _epochReward: uint256 = self.epoch_token_rewards[_epoch][_token]
         if _epochReward == 0:
-            continue  #xx todo event
+            log Log1Args("skip _epoch {0} because _epochReward=0", _epoch)
+            continue
         _avgUserBlanace: uint256 = self._averageUserBlanaceOverEpoch(msg.sender, _epoch)
         if _avgUserBlanace == 0:
-            continue  #xx todo event
+            log Log1Args("skip _epoch {0} because _avgUserBlanace=0", _epoch)
+            continue
         _avgTotalSupply: uint256 = self._averageTotalSupplyOverEpoch(_epoch)
         if _avgTotalSupply == 0:
-            continue  #xx todo event
+            log Log1Args("skip _epoch {0} because _avgTotalSupply=0", _epoch)
+            continue
         rewardsAmount += _epochReward * _avgUserBlanace / _avgTotalSupply
         log UserRewardsClaimedDebug(_epoch, _avgUserBlanace, _avgTotalSupply, _epochReward, _epochReward * _avgUserBlanace / _avgTotalSupply)
     self.user_token_claimed_epoch[msg.sender][_token] = _epoch - 1
@@ -1207,7 +1214,7 @@ def claim_rewards(_token: address):
 
 @external
 def emergency_withdraw(_token: address, _amount: uint256, to: address):
-    assert msg.sender == self.admin
+    assert msg.sender == self._admin()
     if _token == ZERO_ADDRESS:
         send(to, _amount)
     else:
@@ -1215,7 +1222,7 @@ def emergency_withdraw(_token: address, _amount: uint256, to: address):
 
 @external
 def emergency_withdraw_many(_tokens: address[30], _amounts: uint256[30], tos: address[30]):
-    assert msg.sender == self.admin
+    assert msg.sender == self._admin()
     for i in range(30):
         _token: address = _tokens[i]
         _amount: uint256 = _amounts[i]

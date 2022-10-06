@@ -151,6 +151,7 @@ def test_share_rewards_1user_delay_after_initialization(web3, chain, accounts, t
     assert voting_escrow.epoch_token_rewards(2, token) == reward_amount
 
     voting_escrow.checkpoint()
+    assert voting_escrow.epoch() == 3
 
     assert voting_escrow.user_token_claimed_epoch(user1, token) == 0
 
@@ -161,13 +162,13 @@ def test_share_rewards_1user_delay_after_initialization(web3, chain, accounts, t
     print(f"{tx.events['UserRewardsClaimedDebug']=}\n")
     assert tx.events['UserRewardsClaimed']['amount'] == reward_amount
     assert tx.events['UserRewardsClaimed']['amount'] == claimable
-    assert voting_escrow.user_token_claimed_epoch(user1, token) == 1
+    assert voting_escrow.user_token_claimed_epoch(user1, token) == 2
 
     claimable = voting_escrow.user_token_claimable_rewards(user1, token)
     tx = voting_escrow.claim_rewards(token, {"from": user1})
     assert claimable == 0
     assert tx.events['UserRewardsClaimed']['amount'] == 0
-    assert voting_escrow.user_token_claimed_epoch(user1, token) == 1
+    assert voting_escrow.user_token_claimed_epoch(user1, token) == 2
 
 
 def test_share_rewards_2users_same_time_deposit(web3, chain, accounts, token, voting_escrow):
@@ -395,9 +396,9 @@ def test_share_rewards_2users_3h_deposit(web3, chain, accounts, token, voting_es
     assert voting_escrow.epoch() == 3
     reward_epoch1 = voting_escrow.epoch()
 
-    chain.sleep(sleep)
+    chain.sleep(sleep+60)
     voting_escrow.checkpoint()
-    assert voting_escrow.epoch() == 4
+    assert voting_escrow.epoch() == 5
 
 
     start_ts = voting_escrow.point_history(reward_epoch1)[2]
@@ -437,7 +438,7 @@ def test_share_rewards_2users_3h_deposit(web3, chain, accounts, token, voting_es
     # print(f"{tx.events['_averageUserBlanaceOverEpochDebugS']=}\n")
     # print(f"{tx.events['UserRewardsClaimedDebug']=}\n")
     assert tx.events['UserRewardsClaimed']['amount'] // 1000 == int(reward_amount * user1_share)  // 1000
-    assert voting_escrow.user_token_claimed_epoch(user1, token) == 3
+    assert voting_escrow.user_token_claimed_epoch(user1, token) == 4
 
     print(f'start claim user2')
     tx = voting_escrow.claim_rewards(token, {"from": user2})
@@ -445,7 +446,7 @@ def test_share_rewards_2users_3h_deposit(web3, chain, accounts, token, voting_es
     print(f"{tx.events['_averageUserBlanaceOverEpochDebugS']=}\n")
     print(f"{tx.events['UserRewardsClaimedDebug']=}\n")
     assert tx.events['UserRewardsClaimed']['amount'] // 1000 == reward_amount * user2_share // 1000
-    assert voting_escrow.user_token_claimed_epoch(user2, token) == 3
+    assert voting_escrow.user_token_claimed_epoch(user2, token) == 4
 
 
 def test_share_1user_lock1year_after_10epochs_checkpoint(web3, chain, accounts, token, voting_escrow):
