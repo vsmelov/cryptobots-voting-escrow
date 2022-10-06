@@ -76,6 +76,12 @@ This project is licensed under the [MIT](LICENSE) license.
 
 ## veBITS
 
+### RoadMap
+
+- first epoch for token
+
+### Usage
+
 ```bash
 brownie test -v -R
 ```

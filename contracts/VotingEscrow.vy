@@ -1130,7 +1130,7 @@ event UserRewardsClaimedDebug:
 
 @external
 @view
-def claimable_rewards(_token: address, user: address = msg.sender) -> uint256:
+def user_token_claimable_rewards(user: address, _token: address) -> uint256:
     rewardsAmount: uint256 = 0
     _user_claimed_epoch: uint256 = self.user_token_claimed_epoch[user][_token]
     currentEpoch: uint256 = self.epoch  # load to memory once
