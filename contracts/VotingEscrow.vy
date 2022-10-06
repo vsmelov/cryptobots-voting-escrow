@@ -104,10 +104,13 @@ min_delay_between_manual_checkpoint: public(uint256)
 event MinDelayBetweenManualCheckpointSet:
     value: uint256
 
-@external
-def set_min_delay_between_manual_checkpoint(value: uint256):
-    assert msg.sender == self.admin, "not admin"
-    assert self.last_manual_checkpoint_timestamp != value, "not changed"
+# todo uncomment
+# @external
+# def set_min_delay_between_manual_checkpoint(_value: uint256):
+#     assert msg.sender == self.admin, "not admin"
+#     assert self.last_manual_checkpoint_timestamp != _value, "not changed"
+#     self.last_manual_checkpoint_timestamp = _value
+#     log MinDelayBetweenManualCheckpointSet(_value)
 
 token: public(address)
 supply: public(uint256)
@@ -169,26 +172,29 @@ event MaxPoolMembersSet:
 event Emergency:
     pass
 
-@external
-def enable_emergency():
-    assert msg.sender == self.admin
-    assert not self.emergency
-    self.emergency = True
-    log Emergency()
+# todo uncomment
+# @external
+# def enable_emergency():
+#     assert msg.sender == self.admin
+#     assert not self.emergency
+#     self.emergency = True
+#     log Emergency()
 
-@external
-def set_max_pool_members(_value: uint256):
-    assert msg.sender == self.admin
-    assert self.max_pool_members != _value
-    self.max_pool_members = _value
-    log MaxPoolMembersSet(_value)
+# todo uncomment
+# @external
+# def set_max_pool_members(_value: uint256):
+#     assert msg.sender == self.admin
+#     assert self.max_pool_members != _value
+#     self.max_pool_members = _value
+#     log MaxPoolMembersSet(_value)
 
-@external
-def set_min_stake_amount(_value: uint256):
-    assert msg.sender == self.admin
-    assert self.min_stake_amount != _value
-    self.min_stake_amount = _value
-    log MinStakeAmountSet(_value)
+# todo uncomment
+# @external
+# def set_min_stake_amount(_value: uint256):
+#     assert msg.sender == self.admin
+#     assert self.min_stake_amount != _value
+#     self.min_stake_amount = _value
+#     log MinStakeAmountSet(_value)
 
 @external
 def set_withdraw_disabled(_value: bool):
