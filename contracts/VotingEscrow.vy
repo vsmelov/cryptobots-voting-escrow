@@ -163,6 +163,9 @@ event WithdrawDisabledSet:
 event MinStakeAmountSet:
     value: uint256
 
+event MaxPoolMembersSet:
+    value: uint256
+
 event Emergency:
     pass
 
@@ -172,6 +175,13 @@ def enable_emergency():
     assert not self.emergency
     self.emergency = True
     log Emergency()
+
+@external
+def set_max_pool_members(_value: uint256):
+    assert msg.sender == self.admin
+    assert self.max_pool_members != _value
+    self.max_pool_members = _value
+    log MaxPoolMembersSet(_value)
 
 @external
 def set_min_stake_amount(_value: uint256):
@@ -249,7 +259,14 @@ def unpause():
         log IncreaseUnlockTimeDisabledSet(False)
 
 @external
-def __init__(token_addr: address, _name: String[64], _symbol: String[32], _version: String[32]):
+def __init__(
+        token_addr: address,
+        _name: String[64],
+        _symbol: String[32],
+        _version: String[32],
+        _max_pool_members: uint256,
+        _min_stake_amount: uint256,
+):
     """
     @notice Contract constructor
     @param token_addr `ERC20CRV` token address
@@ -273,6 +290,9 @@ def __init__(token_addr: address, _name: String[64], _symbol: String[32], _versi
     self.version = _version
 
     self.slope_changes_keys_next_index = 0  # todo remove
+
+    self.max_pool_members = _max_pool_members
+    self.min_stake_amount = _min_stake_amount
 
 
 @external
