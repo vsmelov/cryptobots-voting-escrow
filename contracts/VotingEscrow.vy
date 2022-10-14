@@ -63,6 +63,12 @@ CREATE_LOCK_TYPE: constant(int128) = 1
 INCREASE_LOCK_AMOUNT: constant(int128) = 2
 INCREASE_UNLOCK_TIME: constant(int128) = 3
 
+stuckEpochRewardClaimed: public(HashMap[uint256, bool])
+
+event StuckEpochRewardClaimed:
+    epoch: indexed(uint256)
+    token: indexed(address)
+    amount: uint256
 
 event TransferOwnership:
     admin: address
@@ -1178,7 +1184,33 @@ def user_token_claimable_rewards(user: address, _token: address) -> uint256:
     return rewardsAmount
 
 
-#xx todo what if rewards but no locker?
+# if there was no stake, but reward was transferred to the contract
+# no one can claim it in a usual way, so it will be forever stuck
+# for such situation we have this special method to transfer
+# stuck reward to the owner
+@external
+def claim_stuck_rewards(_token: address, _epoch: uint256):
+    assert msg.sender == self._admin()
+    assert _epoch < self.epoch, "unfinalized epoch"
+    assert not self.stuckEpochRewardClaimed[_epoch], "already claimed"
+    self.stuckEpochRewardClaimed[_epoch] = True
+
+    _epochReward: uint256 = self.epoch_token_rewards[_epoch][_token]
+    if _epochReward == 0:
+        log Log1Args("skip _epoch {0} because _epochReward=0", _epoch)
+        return
+
+    _avgTotalSupply: uint256 = self._averageTotalSupplyOverEpoch(_epoch)
+    assert _avgTotalSupply == 0, "reward not stuck"
+
+    log StuckEpochRewardClaimed(_epoch, _token, _epochReward)
+
+    if _token == ZERO_ADDRESS:
+        send(msg.sender, _epochReward)
+    else:
+        self.safe_transfer(_token, msg.sender, _epochReward)
+
+
 @external
 def claim_rewards(_token: address):
     rewardsAmount: uint256 = 0
