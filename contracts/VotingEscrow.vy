@@ -65,7 +65,7 @@ INCREASE_UNLOCK_TIME: constant(int128) = 3
 
 stuckWindowRewardClaimed: public(HashMap[uint256, bool])
 
-event stuckWindowRewardClaimed:
+event StuckWindowRewardClaimed:
     epoch: indexed(uint256)
     token: indexed(address)
     amount: uint256
@@ -1280,7 +1280,7 @@ def claim_stuck_rewards(_token: address, _window: uint256):
     _avgTotalSupply: uint256 = self._averageTotalSupplyOverWindow(_window)
     assert _avgTotalSupply == 0, "reward not stuck"
 
-    log stuckWindowRewardClaimed(_window, _token, _windowReward)
+    log StuckWindowRewardClaimed(_window, _token, _windowReward)
 
     if _token == ZERO_ADDRESS:
         send(msg.sender, _windowReward)
