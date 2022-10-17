@@ -1292,11 +1292,11 @@ def claim_stuck_rewards(_token: address, _window: uint256):
 def claim_rewards(_token: address):
     rewardsAmount: uint256 = 0
     lastProcessedWindow: uint256 = 0
-    (rewardsAmount, lastProcessedWindow) = _user_token_claimable_rewards(msg.sender, _token)
-    self.user_token_claimed_epoch[msg.sender][_token] = lastProcessedWindow
+    (rewardsAmount, lastProcessedWindow) = self._user_token_claimable_rewards(msg.sender, _token)
+    self.user_token_claimed_window[msg.sender][_token] = lastProcessedWindow
 
-    any_transfer(_token, msg.sender, rewardsAmount)
-    log UserRewardsClaimed(_epoch - 1, _token, rewardsAmount)
+    self.any_transfer(_token, msg.sender, rewardsAmount)
+    log UserRewardsClaimed(lastProcessedWindow, _token, rewardsAmount)
 
 
 @internal
