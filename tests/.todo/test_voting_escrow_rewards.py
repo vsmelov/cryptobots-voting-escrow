@@ -11,22 +11,22 @@ def test_receive_rewards(web3, chain, accounts, token, voting_escrow):
     reward_amount = 10**18
 
     assert voting_escrow.epoch() == 0
-    assert voting_escrow.epoch_token_rewards(0, token) == 0
-    assert voting_escrow.epoch_token_rewards(1, token) == 0
+    assert voting_escrow.window_token_rewards(0, token) == 0
+    assert voting_escrow.window_token_rewards(1, token) == 0
 
     token.approve(voting_escrow, reward_amount)
     voting_escrow.receiveReward(token, reward_amount, {"from": payer})
 
     assert voting_escrow.epoch() == 0
-    assert voting_escrow.epoch_token_rewards(0, token) == reward_amount
-    assert voting_escrow.epoch_token_rewards(1, token) == 0
+    assert voting_escrow.window_token_rewards(0, token) == reward_amount
+    assert voting_escrow.window_token_rewards(1, token) == 0
 
     token.approve(voting_escrow, reward_amount)
     voting_escrow.receiveReward(token, reward_amount, {"from": payer})
 
     assert voting_escrow.epoch() == 0
-    assert voting_escrow.epoch_token_rewards(0, token) == reward_amount * 2
-    assert voting_escrow.epoch_token_rewards(1, token) == 0
+    assert voting_escrow.window_token_rewards(0, token) == reward_amount * 2
+    assert voting_escrow.window_token_rewards(1, token) == 0
 
     chain.sleep(EPOCH_SECONDS)
     voting_escrow.checkpoint({"from": payer})
@@ -34,15 +34,15 @@ def test_receive_rewards(web3, chain, accounts, token, voting_escrow):
     voting_escrow.receiveReward(token, reward_amount, {"from": payer})
 
     assert voting_escrow.epoch() == 1
-    assert voting_escrow.epoch_token_rewards(0, token) == reward_amount * 2
-    assert voting_escrow.epoch_token_rewards(1, token) == reward_amount
+    assert voting_escrow.window_token_rewards(0, token) == reward_amount * 2
+    assert voting_escrow.window_token_rewards(1, token) == reward_amount
 
     chain.sleep(EPOCH_SECONDS*10)
     voting_escrow.checkpoint({"from": payer})
     token.approve(voting_escrow, reward_amount)
     voting_escrow.receiveReward(token, reward_amount, {"from": payer})
     assert voting_escrow.epoch() == 12
-    assert voting_escrow.epoch_token_rewards(12, token) == reward_amount
+    assert voting_escrow.window_token_rewards(12, token) == reward_amount
 
 
 def test_share_rewards_1user(web3, chain, accounts, token, voting_escrow):
@@ -55,7 +55,7 @@ def test_share_rewards_1user(web3, chain, accounts, token, voting_escrow):
     user3 = accounts[3]
 
     assert voting_escrow.epoch() == 0
-    assert voting_escrow.epoch_token_rewards(0, token) == 0
+    assert voting_escrow.window_token_rewards(0, token) == 0
 
     token.transfer(user1, deposit)
     token.approve(voting_escrow, deposit, {"from": user1})
@@ -82,7 +82,7 @@ def test_share_rewards_1user(web3, chain, accounts, token, voting_escrow):
     token.approve(voting_escrow, reward_amount)
     voting_escrow.receiveReward(token, reward_amount, {"from": payer})
     assert voting_escrow.epoch() == 1
-    assert voting_escrow.epoch_token_rewards(1, token) == reward_amount
+    assert voting_escrow.window_token_rewards(1, token) == reward_amount
 
     voting_escrow.checkpoint()
 
@@ -114,7 +114,7 @@ def test_share_rewards_1user_delay_after_initialization(web3, chain, accounts, t
     user3 = accounts[3]
 
     assert voting_escrow.epoch() == 0
-    assert voting_escrow.epoch_token_rewards(0, token) == 0
+    assert voting_escrow.window_token_rewards(0, token) == 0
 
     assert voting_escrow.user_token_claimable_rewards(user1, token) == 0
     chain.sleep(30 * 24 * 3600)  # todo check fail
@@ -148,7 +148,7 @@ def test_share_rewards_1user_delay_after_initialization(web3, chain, accounts, t
     token.approve(voting_escrow, reward_amount)
     voting_escrow.receiveReward(token, reward_amount, {"from": payer})
     assert voting_escrow.epoch() == 2
-    assert voting_escrow.epoch_token_rewards(2, token) == reward_amount
+    assert voting_escrow.window_token_rewards(2, token) == reward_amount
 
     voting_escrow.checkpoint()
     assert voting_escrow.epoch() == 3
@@ -182,7 +182,7 @@ def test_share_rewards_2users_same_time_deposit(web3, chain, accounts, token, vo
     user2 = accounts[2]
 
     assert voting_escrow.epoch() == 0
-    assert voting_escrow.epoch_token_rewards(0, token) == 0
+    assert voting_escrow.window_token_rewards(0, token) == 0
 
     chain.sleep(sleep)
     user1_deposit_amount = deposit
@@ -252,7 +252,7 @@ def test_share_rewards_2users_same_time_deposit(web3, chain, accounts, token, vo
     voting_escrow.checkpoint()
     assert voting_escrow.epoch() == 3
 
-    assert voting_escrow.epoch_token_rewards(2, token) == 0
+    assert voting_escrow.window_token_rewards(2, token) == 0
     token.approve(voting_escrow, reward_amount)
     voting_escrow.receiveReward(token, reward_amount, {"from": payer})
     assert voting_escrow.epoch() == 3
@@ -318,7 +318,7 @@ def test_share_rewards_2users_3h_deposit(web3, chain, accounts, token, voting_es
     user2 = accounts[2]
 
     assert voting_escrow.epoch() == 0
-    assert voting_escrow.epoch_token_rewards(0, token) == 0
+    assert voting_escrow.window_token_rewards(0, token) == 0
 
     chain.sleep(sleep)
     user1_deposit_amount = deposit
@@ -390,7 +390,7 @@ def test_share_rewards_2users_3h_deposit(web3, chain, accounts, token, voting_es
     voting_escrow.checkpoint()
     assert voting_escrow.epoch() == 3
 
-    assert voting_escrow.epoch_token_rewards(2, token) == 0
+    assert voting_escrow.window_token_rewards(2, token) == 0
     token.approve(voting_escrow, reward_amount)
     voting_escrow.receiveReward(token, reward_amount, {"from": payer})
     assert voting_escrow.epoch() == 3
@@ -460,7 +460,7 @@ def test_share_1user_lock1year_after_10epochs_checkpoint(web3, chain, accounts, 
     user2 = accounts[2]
 
     assert voting_escrow.epoch() == 0
-    assert voting_escrow.epoch_token_rewards(0, token) == 0
+    assert voting_escrow.window_token_rewards(0, token) == 0
 
     chain.sleep(sleep)
     user1_deposit_amount = deposit
@@ -524,7 +524,7 @@ def test_share_1user_lock3epochs_after_10epochs_checkpoint(web3, chain, accounts
     user2 = accounts[2]
 
     assert voting_escrow.epoch() == 0
-    assert voting_escrow.epoch_token_rewards(0, token) == 0
+    assert voting_escrow.window_token_rewards(0, token) == 0
 
     chain.sleep(sleep)
     user1_deposit_amount = deposit
@@ -576,7 +576,7 @@ def test_share_rewards_2users_lock100epochs_10epochs_deposit(web3, chain, accoun
     user2 = accounts[2]
 
     assert voting_escrow.epoch() == 0
-    assert voting_escrow.epoch_token_rewards(0, token) == 0
+    assert voting_escrow.window_token_rewards(0, token) == 0
 
     chain.sleep(sleep)
     user1_deposit_amount = deposit
@@ -648,7 +648,7 @@ def test_share_rewards_2users_lock100epochs_10epochs_deposit(web3, chain, accoun
     voting_escrow.checkpoint()
     assert voting_escrow.epoch() == 13
 
-    assert voting_escrow.epoch_token_rewards(2, token) == 0
+    assert voting_escrow.window_token_rewards(2, token) == 0
     token.approve(voting_escrow, reward_amount)
     voting_escrow.receiveReward(token, reward_amount, {"from": payer})
     assert voting_escrow.epoch() == 13
@@ -718,7 +718,7 @@ def test_share_rewards_2users_lock3epochs_10epochs_deposit(web3, chain, accounts
     user2 = accounts[2]
 
     assert voting_escrow.epoch() == 0
-    assert voting_escrow.epoch_token_rewards(0, token) == 0
+    assert voting_escrow.window_token_rewards(0, token) == 0
 
     chain.sleep(sleep)
     user1_deposit_amount = deposit
@@ -794,7 +794,7 @@ def test_share_rewards_2users_lock3epochs_10epochs_deposit(web3, chain, accounts
     voting_escrow.checkpoint()
     assert voting_escrow.epoch() == 13
 
-    assert voting_escrow.epoch_token_rewards(2, token) == 0
+    assert voting_escrow.window_token_rewards(2, token) == 0
     token.approve(voting_escrow, reward_amount)
     voting_escrow.receiveReward(token, reward_amount, {"from": payer})
     assert voting_escrow.epoch() == 13
@@ -864,7 +864,7 @@ def test_share_rewards_2users_lock3epochs_10epochs_deposit(web3, chain, accounts
 #     user3 = accounts[3]
 #
 #     assert voting_escrow.epoch() == 0
-#     assert voting_escrow.epoch_token_rewards(0, token) == 0
+#     assert voting_escrow.window_token_rewards(0, token) == 0
 #
 #     chain.sleep(sleep)
 #     token.transfer(user1, deposit)
@@ -892,7 +892,7 @@ def test_share_rewards_2users_lock3epochs_10epochs_deposit(web3, chain, accounts
 #     token.approve(voting_escrow, reward_amount)
 #     voting_escrow.receiveReward(token, reward_amount, {"from": payer})
 #     assert voting_escrow.epoch() == 4
-#     assert voting_escrow.epoch_token_rewards(4, token) == reward_amount
+#     assert voting_escrow.window_token_rewards(4, token) == reward_amount
 #
 #     voting_escrow.checkpoint()
 #     assert voting_escrow.epoch() == 5

@@ -154,6 +154,7 @@ locked: public(HashMap[address, LockedBalance])
 
 integrated_totalSupply_over_window: public(HashMap[uint256, uint256])  # timestamp of the window start -> aggregated value (assuming checkpoint will not change)
 user_token_claimed_window: public(HashMap[address, HashMap[address, uint256]])  # user -> token -> last claimed window
+user_token_claimed_window_start: public(HashMap[address, uint256])  # user -> first unclaimed window
 window_token_rewards: public(HashMap[uint256, HashMap[address, uint256]])  # epoch -> token -> totalRewardsAmount
 
 epoch: public(uint256)
@@ -681,6 +682,7 @@ def create_lock(_value: uint256, _unlock_time: uint256):
     unlock_time: uint256 = (_unlock_time / EPOCH_SECONDS) * EPOCH_SECONDS  # Locktime is rounded down to weeks
     _locked: LockedBalance = self.locked[msg.sender]
 
+    self.user_token_claimed_window_start[msg.sender] = self._currentWindow() - 1   # to not process reward from =0
     self.pool_members += 1
     assert self.pool_members <= self.max_pool_members, "max_pool_members exceed"
 
@@ -977,11 +979,11 @@ def _searchForUserEpochByTimestamp(addr: address, ts: uint256) -> uint256:
             _max = _mid - 1
     return _min
 
-event _averageUserBlanaceOverWindowDebug:
+event _averageUserBalanaceOverWindowDebug:
     user_epoch_start: uint256
     user_epoch_end: uint256
 
-event _averageUserBlanaceOverWindowDebugS:
+event _averageUserBalanaceOverWindowDebugS:
     user_epoch: uint256
     bias: int128
     slope: int128
@@ -1016,7 +1018,7 @@ def anyTrapezoidArea(
 
 @internal
 @view
-def _averageUserBlanaceOverWindow(addr: address, _window: uint256) -> uint256:
+def _averageUserBalanaceOverWindow(addr: address, _window: uint256) -> uint256:
     assert _window < (block.timestamp / EPOCH_SECONDS * EPOCH_SECONDS), "unfinalized epoch"
     ts_start: uint256 = _window
     ts_end: uint256 = _window + EPOCH_SECONDS
@@ -1054,7 +1056,7 @@ def _averageUserBlanaceOverWindow(addr: address, _window: uint256) -> uint256:
 
         if ts_end == ts_start:  #xx todo discuss
             assert user_epoch_start == user_epoch_end
-            log _averageUserBlanaceOverWindowDebugS(
+            log _averageUserBalanaceOverWindowDebugS(
                 user_epoch,
                 bias,
                 slope,
@@ -1063,11 +1065,11 @@ def _averageUserBlanaceOverWindow(addr: address, _window: uint256) -> uint256:
                 _ts1-_ts0,
                 0
             )
-            log _averageUserBlanaceOverWindowDebug(user_epoch_start, user_epoch_end)
+            log _averageUserBalanaceOverWindowDebug(user_epoch_start, user_epoch_end)
             return convert(bias, uint256)
 
 
-        log _averageUserBlanaceOverWindowDebugS(
+        log _averageUserBalanaceOverWindowDebugS(
             user_epoch,
             bias,
             slope,
@@ -1080,7 +1082,7 @@ def _averageUserBlanaceOverWindow(addr: address, _window: uint256) -> uint256:
         # next iteration
         user_epoch += 1
 
-    log _averageUserBlanaceOverWindowDebug(user_epoch_start, user_epoch_end)
+    log _averageUserBalanaceOverWindowDebug(user_epoch_start, user_epoch_end)
 
     avgBalance: uint256 = areaUnderPolyline / (ts_end - ts_start)
     return avgBalance
@@ -1201,7 +1203,7 @@ event UserRewardsClaimed:
 
 event UserRewardsClaimedDebug:
     _epoch: uint256
-    _avgUserBlanace: uint256
+    _avgUserBalanace: uint256
     _avgTotalSupply: uint256
     _epochReward: uint256
     _userEpochReward: uint256
@@ -1239,16 +1241,19 @@ def _user_token_claimable_rewards(user: address, _token: address) -> (uint256, u
     rewardsAmount: uint256 = 0
     __currentWindow: uint256 = self._currentWindow()
     _window: uint256 = self.user_token_claimed_window[user][_token]
-    for d_epoch in range(255):  #xx 255?
+    if _window == 0:
+        _window = self.user_token_claimed_window_start[user]
+        assert _window != 0, "broken state"
+    for d_epoch in range(255):  #xx todo is 255 enough
         _window += EPOCH_SECONDS  # move to process the next unprocessed widnow
         if _window >= __currentWindow:  # note: we use >= because currentWindow is not finalized
             _window -= EPOCH_SECONDS  # we want to keep last processed value
             break
-        _avgUserBlanace: uint256 = self._averageUserBlanaceOverWindow(user, _window)
-        _avgTotalSupply: uint256 = self.integrated_totalSupply_over_window[_window] / EPOCH_SECONDS
-        _windowReward: uint256 = self.window_token_rewards[_window][_token]
-        _thisWindowUserReward: uint256 = _windowReward * _avgUserBlanace / _avgTotalSupply
-        rewardsAmount += _thisWindowUserReward
+        _avgUserBalanace: uint256 = self._averageUserBalanaceOverWindow(user, _window)
+        # _avgTotalSupply: uint256 = self.integrated_totalSupply_over_window[_window] / EPOCH_SECONDS
+        # _windowReward: uint256 = self.window_token_rewards[_window][_token]
+        # _thisWindowUserReward: uint256 = _windowReward * _avgUserBalanace / _avgTotalSupply
+        # rewardsAmount += _thisWindowUserReward
     return rewardsAmount, _window
 
 
