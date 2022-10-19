@@ -521,16 +521,7 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
             self.integrated_totalSupply_over_window[_prev_point_window] += trapezoidArea
 
             assert last_point.ts == _last_point_window, "impossible: no point at window start"
-            # # initialize last window aggregate
-            # if last_point.ts > _last_point_window:  # todo: how could it be possible?
-            #     trapezoidArea = self.anyTrapezoidArea(
-            #         last_point.ts,  # _bias_ts
-            #         last_point.bias,  # _bias
-            #         last_point.slope,  # _slope  note: its already corrected by slope_changes
-            #         _last_point_window,  # _ts0
-            #         last_point.ts   # _ts1
-            #     )
-            #     self.integrated_totalSupply_over_window[_last_point_window] += trapezoidArea
+            # no need to initialize integrated_totalSupply_over_window[_last_point_window] since interval=0
         elif _prev_point_window == _last_point_window:
             # extend aggregate
             trapezoidArea = self.anyTrapezoidArea(
