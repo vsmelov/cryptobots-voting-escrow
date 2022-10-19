@@ -5,6 +5,21 @@ import brownie
 from .utils import *
 
 
+def test_checkpoints(web3, chain, accounts, token, voting_escrow):
+    EPOCH_SECONDS = voting_escrow.EPOCH_SECONDS()
+    voting_escrow.checkpoint()
+    chain.sleep(60)
+    voting_escrow.checkpoint()
+    chain.sleep(EPOCH_SECONDS // 2)
+    voting_escrow.checkpoint()
+    chain.sleep(EPOCH_SECONDS)
+    voting_escrow.checkpoint()
+    chain.sleep(EPOCH_SECONDS * 2)
+    voting_escrow.checkpoint()
+    chain.sleep(EPOCH_SECONDS * 10)
+    voting_escrow.checkpoint()
+
+
 def test_receive_rewards(web3, chain, accounts, token, voting_escrow):
     EPOCH_SECONDS = voting_escrow.EPOCH_SECONDS()
     payer = accounts[0]

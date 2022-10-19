@@ -461,7 +461,6 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
     last_point: Point = Point({bias: 0, slope: 0, ts: block.timestamp, blk: block.number})
     if _epoch > 0:
         last_point = self.point_history[_epoch]
-    last_checkpoint: uint256 = last_point.ts
     # initial_last_point is used for extrapolation to calculate block number
     # (approximately, for *At methods) and save them
     # as we cannot figure that out exactly from inside the contract
@@ -473,78 +472,77 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
     # But that's ok b/c we know the block in such case
 
     # Go over weeks to fill history and calculate what the current point is
-    t_i: uint256 = (last_checkpoint / EPOCH_SECONDS) * EPOCH_SECONDS
+    checkpoint_ts: uint256 = (last_point.ts / EPOCH_SECONDS) * EPOCH_SECONDS
     for i in range(255):
         # Hopefully it won't happen that this won't get used in 5 years!
         # If it does, users will be able to withdraw but vote weight will be broken
-        t_i += EPOCH_SECONDS
+        checkpoint_ts += EPOCH_SECONDS
         d_slope: int128 = 0
-        if t_i > block.timestamp:
-            t_i = block.timestamp
+        if checkpoint_ts > block.timestamp:
+            checkpoint_ts = block.timestamp  # when we crossed all window checkpoints lets make a checkpoint at NOW
         else:
-            d_slope = self.slope_changes[t_i]  #xx todo careful!
-        last_point.bias -= last_point.slope * convert(t_i - last_checkpoint, int128)
+            d_slope = self.slope_changes[checkpoint_ts]  #xx todo careful!
+
+        # set attributes of the new checkpoint
+        last_point.bias -= last_point.slope * convert(checkpoint_ts - last_point.ts, int128)
         last_point.slope += d_slope
         if last_point.bias < 0:  # This can happen
             last_point.bias = 0
         if last_point.slope < 0:  # This cannot happen - just in case
             last_point.slope = 0
-        last_checkpoint = t_i
-        last_point.ts = t_i
-        last_point.blk = initial_last_point.blk + block_slope * (t_i - initial_last_point.ts) / MULTIPLIER
-
-        # handle integrated_totalSupply_over_window
-
-        if last_checkpoint / EPOCH_SECONDS * EPOCH_SECONDS < t_i / EPOCH_SECONDS * EPOCH_SECONDS:
-            # xx todo for loop
-            _window: uint256 = last_checkpoint / EPOCH_SECONDS * EPOCH_SECONDS
-
-            previous_point: Point = Point({bias: 0, slope: 0, ts: 0, blk: 0})
-            if _epoch > 1:
-                previous_point = self.point_history[_epoch - 1]
-
-            # process current  xx
-            __currentWindow: uint256 = last_point.ts / EPOCH_SECONDS * EPOCH_SECONDS
-            slope: int128 = last_point.slope
-            start_bias: int128 = last_point.bias
-            end_bias: int128 = start_bias - slope * convert(EPOCH_SECONDS, int128)
-            trapezoidArea: uint256 = self.anyTrapezoidArea(
-                last_point.ts,  # _bias_ts
-                last_point.bias,  # _bias
-                last_point.slope,  # _slope
-                previous_point.ts,  # _ts0
-                last_point.ts  # _ts1
-            )
-            self.integrated_totalSupply_over_window[t_i] = trapezoidArea
-
-        elif last_checkpoint / EPOCH_SECONDS * EPOCH_SECONDS == t_i / EPOCH_SECONDS * EPOCH_SECONDS:
-            _ts0: uint256 = last_checkpoint
-
-            # _ts1 = min(window.end, now)
-            _ts1: uint256 = min(
-                t_i / EPOCH_SECONDS * EPOCH_SECONDS + EPOCH_SECONDS,
-                block.timestamp
-            )
-
-            self.integrated_totalSupply_over_window[t_i] += self.anyTrapezoidArea(
-                last_checkpoint,  # _bias_ts
-                last_point.bias,  # _bias
-                last_point.slope,  # _slope
-                _ts0,  # _ts0
-                _ts1  # _ts1
-            )
-        else:  # last_checkpoint / EPOCH_SECONDS * EPOCH_SECONDS > t_i / EPOCH_SECONDS * EPOCH_SECONDS
-            raise "impossible state"
-
-
-
+        last_point.ts = checkpoint_ts
+        last_point.blk = initial_last_point.blk + \
+                         block_slope * (checkpoint_ts - initial_last_point.ts) / MULTIPLIER
 
         _epoch += 1
-        if t_i == block.timestamp:
+        if checkpoint_ts == block.timestamp:
             last_point.blk = block.number
             break
         else:
             self.point_history[_epoch] = last_point
+
+        # handle integrated_totalSupply_over_window
+        # todo test
+        trapezoidArea: uint256 = 0
+        prev_point: Point = self.point_history[_epoch - 1]
+        _prev_point_window: uint256 = prev_point.ts / EPOCH_SECONDS * EPOCH_SECONDS
+        _last_point_window: uint256 = last_point.ts / EPOCH_SECONDS * EPOCH_SECONDS
+        if _prev_point_window < _last_point_window:
+            assert _last_point_window - _prev_point_window == EPOCH_SECONDS, "impossible: window_diff>EPOCH_SECONDS"
+
+            # finalize previous window aggregate
+            trapezoidArea = self.anyTrapezoidArea(
+                prev_point.ts,  # _bias_ts
+                prev_point.bias,  # _bias
+                prev_point.slope,  # _slope
+                prev_point.ts,  # _ts0
+                _last_point_window   # _ts1
+            )
+            self.integrated_totalSupply_over_window[_prev_point_window] += trapezoidArea
+
+            assert last_point.ts == _last_point_window, "impossible: no point at window start"
+            # # initialize last window aggregate
+            # if last_point.ts > _last_point_window:  # todo: how could it be possible?
+            #     trapezoidArea = self.anyTrapezoidArea(
+            #         last_point.ts,  # _bias_ts
+            #         last_point.bias,  # _bias
+            #         last_point.slope,  # _slope  note: its already corrected by slope_changes
+            #         _last_point_window,  # _ts0
+            #         last_point.ts   # _ts1
+            #     )
+            #     self.integrated_totalSupply_over_window[_last_point_window] += trapezoidArea
+        elif _prev_point_window == _last_point_window:
+            # extend aggregate
+            trapezoidArea = self.anyTrapezoidArea(
+                prev_point.ts,  # _bias_ts
+                prev_point.bias,  # _bias
+                prev_point.slope,  # _slope
+                prev_point.ts,  # _ts0
+                last_point.ts  # _ts1
+            )
+            self.integrated_totalSupply_over_window[checkpoint_ts] += trapezoidArea
+        else:  # _prev_point_window > _last_point_window
+            raise "impossible: prev window > last"
 
     self.epoch = _epoch
     # Now point_history is filled until t=now
@@ -1228,13 +1226,15 @@ event Log0Args:
 
 
 event Log1Args:
-    message: String[256]
+    message1: String[256]
     value1: uint256
 
 
 event Log2Args:
-    message: String[256]
+    message1: String[256]
     value1: uint256
+    message2: String[256]
+    value2: uint256
 
 
 @internal
