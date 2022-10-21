@@ -791,6 +791,31 @@ def find_block_epoch(_block: uint256, max_epoch: uint256) -> uint256:
     return _min
 
 
+@internal
+@view
+def find_timestamp_epoch(_ts: uint256, max_epoch: uint256) -> uint256:
+    """
+    @notice Binary search for epoch timestamp
+    @param _ts timestamp to find
+    @param max_epoch Don't go beyond this epoch
+    @return Approximate epoch for block
+    """
+    # Binary search
+    _min: uint256 = 0
+    _max: uint256 = max_epoch
+    assert self.point_history[_min].ts <= _ts, "not found"
+    # assert self.point_history[_max].ts >= _ts, "not found"  # commented out because you can search for the last epoch before ts
+    for i in range(128):  # Will be always enough for 128-bit numbers
+        if _min >= _max:
+            break
+        _mid: uint256 = (_min + _max + 1) / 2
+        if self.point_history[_mid].ts <= _ts:
+            _min = _mid
+        else:
+            _max = _mid - 1
+    return _min
+
+
 @external
 @view
 def balanceOf(addr: address, _t: uint256 = block.timestamp) -> uint256:
@@ -895,6 +920,12 @@ def supply_at(point: Point, t: uint256) -> uint256:
 @external
 @view
 def totalSupply(t: uint256 = block.timestamp) -> uint256:
+    return self._totalSupply(t)
+
+
+@internal
+@view
+def _totalSupply(t: uint256 = block.timestamp) -> uint256:
     """
     @notice Calculate total voting power
     @dev Adheres to the ERC20 `totalSupply` interface for Aragon compatibility
@@ -903,6 +934,31 @@ def totalSupply(t: uint256 = block.timestamp) -> uint256:
     _epoch: uint256 = self.epoch
     last_point: Point = self.point_history[_epoch]
     return self.supply_at(last_point, t)
+
+
+@external
+@view
+def totalSupplyAtTimestamp(_ts: uint256) -> (uint256, uint256):
+    """
+    @notice Calculate total voting power at some point in the past
+    @param _ts Timestamp to calculate the total voting power at
+    @return target_epoch, Total voting power at `_ts`
+    """
+    return self._totalSupplyAtTimestamp(_ts)
+
+
+@internal
+@view
+def _totalSupplyAtTimestamp(_ts: uint256) -> (uint256, uint256):
+    """
+    @notice Calculate total voting power at some point in the past
+    @param _ts Timestamp to calculate the total voting power at
+    @return target_epoch, Total voting power at `_ts`
+    """
+    _epoch: uint256 = self.epoch
+    target_epoch: uint256 = self.find_timestamp_epoch(_ts, _epoch)
+    point: Point = self.point_history[target_epoch]
+    return target_epoch, self.supply_at(point, _ts)
 
 
 @external
@@ -982,6 +1038,16 @@ event _averageUserBalanaceOverWindowDebug:
     avg_balance: uint256
 
 
+event _averageUserBalanceOverWindowDebugSZeroInterval:
+    user_epoch: uint256
+    bias: int128
+    slope: int128
+    _ts0: uint256
+    _ts1: uint256
+    _ts: uint256
+    trapezoidArea: uint256
+
+
 event _averageUserBalanceOverWindowDebugS:
     user_epoch: uint256
     bias: int128
@@ -1025,6 +1091,7 @@ def averageUserBalanaceOverWindowTx(addr: address, _window: uint256) -> uint256:
 def averageUserBalanaceOverWindow(addr: address, _window: uint256) -> uint256:
     return self._averageUserBalanaceOverWindow(addr, _window)
 
+
 @internal
 @view
 def _averageUserBalanaceOverWindow(addr: address, _window: uint256) -> uint256:
@@ -1063,7 +1130,8 @@ def _averageUserBalanaceOverWindow(addr: address, _window: uint256) -> uint256:
 
         if ts_end == ts_start:  #xx todo discuss
             assert user_epoch_start == user_epoch_end
-            log _averageUserBalanceOverWindowDebugS(
+            assert _ts0 == _ts1
+            log _averageUserBalanceOverWindowDebugSZeroInterval(
                 user_epoch,
                 bias,
                 slope,
@@ -1110,6 +1178,15 @@ def averageTotalSupplyOverWindow(_window: uint256) -> uint256:
     return self._averageTotalSupplyOverWindow(_window)
 
 
+event _averageTotalSupplyOverWindow_NewWindow:
+    _window: uint256
+    target_epoch_start: uint256
+    total_supply_start: uint256
+    target_epoch_end: uint256
+    total_supply_end: uint256
+    trapezoidArea: uint256
+
+
 @internal
 @view
 def _averageTotalSupplyOverWindow(_window: uint256) -> uint256:
@@ -1118,16 +1195,27 @@ def _averageTotalSupplyOverWindow(_window: uint256) -> uint256:
     _epoch: uint256 = self.epoch
     if self.point_history[_epoch].ts < _window:
         # you know the last point, and only need to integrate the curve
-        # todo do not forget about slope changes!
-        trapezoidArea = self.anyTrapezoidArea(
-            self.point_history[_epoch].ts,
-            self.point_history[_epoch].bias,
-            self.point_history[_epoch].slope,
+        # do not forget about slope changes! (it's handled inside _totalSupplyAtTimestamp)
+        target_epoch_start: uint256 = 0
+        total_supply_start: uint256 = 0
+        target_epoch_end: uint256 = 0
+        total_supply_end: uint256 = 0
+        target_epoch_start, total_supply_start = self._totalSupplyAtTimestamp(_window)
+        target_epoch_end, total_supply_end = self._totalSupplyAtTimestamp(_window + EPOCH_SECONDS)
+        assert _epoch == target_epoch_start, "impossible: not last epoch"
+        assert _epoch == target_epoch_end, "impossible: not last epoch"
+        trapezoidArea = (total_supply_start + total_supply_end) * EPOCH_SECONDS / 2
+        log _averageTotalSupplyOverWindow_NewWindow(
             _window,
-            _window + EPOCH_SECONDS
+            target_epoch_start,
+            total_supply_start,
+            target_epoch_end,
+            total_supply_end,
+            trapezoidArea,
         )
     elif self.point_history[_epoch].ts < _window + EPOCH_SECONDS:
-        # the window is partially aggregated
+        # the window is partially aggregated in interval [_window; self.point_history[_epoch].ts]
+        # so we calculate trapezoid area in [self.point_history[_epoch].ts; _window + EPOCH_SECONDS]
         trapezoidArea = self.anyTrapezoidArea(
             self.point_history[_epoch].ts,
             self.point_history[_epoch].bias,
@@ -1262,7 +1350,7 @@ def _user_token_claimable_rewards(user: address, _token: address) -> (uint256, u
         assert _window != 0, "broken state"
     log Log1Args("initial _window", _window)
 
-    for d_epoch in range(255):  #xx todo is 255 enough
+    for d_window in range(1024):
         _window += EPOCH_SECONDS  # move to process the next unprocessed widnow
         if _window >= __currentWindow:  # note: we use >= because currentWindow is not finalized
             _window -= EPOCH_SECONDS  # we want to keep last processed value

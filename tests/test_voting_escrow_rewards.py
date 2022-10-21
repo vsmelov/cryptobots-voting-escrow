@@ -372,8 +372,10 @@ def test_share_rewards_2users_3h_deposit(web3, chain, accounts, token, voting_es
 
     print(f'start claim user1')
     claimable_tx = voting_escrow.user_token_claimable_rewardsTx(user1, token)
-    print(f'{claimable_tx.events=}')
+    print(f'claimable_tx.events')
+    pretty_events(chain, claimable_tx.txid)
     claimable = voting_escrow.user_token_claimable_rewards(user1, token)
+    assert claimable // 1000 == int(reward_amount * user1_share) // 1000
     claim_tx1 = voting_escrow.claim_rewards(token, {"from": user1})
     print(f"{claim_tx1.events=}")
     assert claimable == claim_tx1.events['UserRewardsClaimed']['amount']
