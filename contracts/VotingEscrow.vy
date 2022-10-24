@@ -722,8 +722,8 @@ def increase_unlock_time(_unlock_time: uint256):
     _locked: LockedBalance = self.locked[msg.sender]
     unlock_time: uint256 = (_unlock_time / EPOCH_SECONDS) * EPOCH_SECONDS  # Locktime is rounded down to weeks
 
-    assert _locked.end > block.timestamp, "Lock expired"
     assert _locked.amount > 0, "Nothing is locked"
+    assert _locked.end > block.timestamp, "Lock expired"
     assert unlock_time > _locked.end, "Can only increase lock duration"
     assert unlock_time <= block.timestamp + MAXTIME, "Voting lock can be 4 years max"
 
@@ -888,6 +888,42 @@ def balanceOfAt(addr: address, _block: uint256) -> uint256:
         return 0
 
 
+@external
+@view
+def balanceOfAtTimestamp(addr: address, _ts: uint256) -> uint256:
+    """
+    @notice Measure voting power of `addr` at block height `_block`
+    @dev Adheres to MiniMe `balanceOfAt` interface: https://github.com/Giveth/minime
+    @param addr User's wallet address
+    @param _ts Timestamp
+    @return Voting power
+    """
+    assert _ts <= block.timestamp  # xx todo extend
+
+    # Binary search
+    _min: uint256 = 0
+    _max: uint256 = self.user_point_epoch[addr]
+    for i in range(128):  # Will be always enough for 128-bit numbers
+        if _min >= _max:
+            break
+        _mid: uint256 = (_min + _max + 1) / 2
+        if self.user_point_history[addr][_mid].ts <= _ts:
+            _min = _mid
+        else:
+            _max = _mid - 1
+
+    upoint: Point = self.user_point_history[addr][_min]
+
+    max_epoch: uint256 = self.epoch
+    _epoch: uint256 = self.find_timestamp_epoch(_ts, max_epoch)
+
+    upoint.bias -= upoint.slope * convert(_ts - upoint.ts, int128)
+    if upoint.bias >= 0:
+        return convert(upoint.bias, uint256)
+    else:
+        return 0
+
+
 @internal
 @view
 def supply_at(point: Point, t: uint256) -> uint256:
@@ -989,13 +1025,14 @@ def totalSupplyAt(_block: uint256) -> uint256:
 
 # Dummy methods for compatibility with Aragon
 
-@external
-def changeController(_newController: address):
-    """
-    @dev Dummy method required for Aragon compatibility
-    """
-    assert msg.sender == self.controller
-    self.controller = _newController
+# todo uncomment
+# @external
+# def changeController(_newController: address):
+#     """
+#     @dev Dummy method required for Aragon compatibility
+#     """
+#     assert msg.sender == self.controller
+#     self.controller = _newController
 
 
 # Rewards
@@ -1336,6 +1373,14 @@ event _user_token_claimable_rewards_log:
     _thisWindowUserReward: uint256
 
 
+event UserClaimWindowStart:
+    value: uint256
+
+
+event UserClaimWindowEnd:
+    value: uint256
+
+
 @internal
 @view
 def _user_token_claimable_rewards(user: address, _token: address) -> (uint256, uint256):
@@ -1347,7 +1392,8 @@ def _user_token_claimable_rewards(user: address, _token: address) -> (uint256, u
     _window: uint256 = self.user_token_claimed_window[user][_token]
     if _window == 0:
         _window = self.user_token_claimed_window_start[user]
-        assert _window != 0, "broken state"
+        assert _window != 0, "no deposit or broken state"
+    log UserClaimWindowStart(_window)
     log Log1Args("initial _window", _window)
 
     for d_window in range(1024):
@@ -1356,8 +1402,17 @@ def _user_token_claimable_rewards(user: address, _token: address) -> (uint256, u
             _window -= EPOCH_SECONDS  # we want to keep last processed value
             break
         _avgUserBalanace: uint256 = self._averageUserBalanaceOverWindow(user, _window)
+        if _avgUserBalanace == 0:
+            log Log1Args("_user_token_claimable_rewards skip _window = {0} because _avgUserBalanace=0", _window)
+            continue
         _avgTotalSupply: uint256 = self._averageTotalSupplyOverWindow(_window)
+        if _avgTotalSupply == 0:
+            log Log1Args("_user_token_claimable_rewards skip _window = {0} because _avgTotalSupply=0", _window)
+            continue
         _windowReward: uint256 = self.window_token_rewards[_window][_token]
+        if _windowReward == 0:
+            log Log1Args("_user_token_claimable_rewards skip _window = {0} because _windowReward=0", _window)
+            continue
         _thisWindowUserReward: uint256 = _windowReward * _avgUserBalanace / _avgTotalSupply
         log _user_token_claimable_rewards_log(
             _window,
@@ -1387,31 +1442,32 @@ def user_token_claimable_rewards(user: address, _token: address) -> uint256:
     return rewardsAmount
 
 
-# if there was no stake, but reward was transferred to the contract
-# no one can claim it in a usual way, so it will be forever stuck
-# for such situation we have this special method to transfer
-# stuck reward to the owner
-@external
-def claim_stuck_rewards(_token: address, _window: uint256):
-    assert msg.sender == self._admin()
-    assert _window < self._currentWindow(), "unfinalized window"
-    assert not self.stuckWindowRewardClaimed[_window], "already claimed"
-    self.stuckWindowRewardClaimed[_window] = True
-
-    _windowReward: uint256 = self.window_token_rewards[_window][_token]
-    if _windowReward == 0:
-        log Log1Args("skip _window {0} because _windowReward=0", _window)
-        return
-
-    _avgTotalSupply: uint256 = self._averageTotalSupplyOverWindow(_window)
-    assert _avgTotalSupply == 0, "reward not stuck"
-
-    log StuckWindowRewardClaimed(_window, _token, _windowReward)
-
-    if _token == ZERO_ADDRESS:
-        send(msg.sender, _windowReward)
-    else:
-        self.safe_transfer(_token, msg.sender, _windowReward)
+# todo uncomment
+# # if there was no stake, but reward was transferred to the contract
+# # no one can claim it in a usual way, so it will be forever stuck
+# # for such situation we have this special method to transfer
+# # stuck reward to the owner
+# @external
+# def claim_stuck_rewards(_token: address, _window: uint256):
+#     assert msg.sender == self._admin()
+#     assert _window < self._currentWindow(), "unfinalized window"
+#     assert not self.stuckWindowRewardClaimed[_window], "already claimed"
+#     self.stuckWindowRewardClaimed[_window] = True
+#
+#     _windowReward: uint256 = self.window_token_rewards[_window][_token]
+#     if _windowReward == 0:
+#         log Log1Args("skip _window {0} because _windowReward=0", _window)
+#         return
+#
+#     _avgTotalSupply: uint256 = self._averageTotalSupplyOverWindow(_window)
+#     assert _avgTotalSupply == 0, "reward not stuck"
+#
+#     log StuckWindowRewardClaimed(_window, _token, _windowReward)
+#
+#     if _token == ZERO_ADDRESS:
+#         send(msg.sender, _windowReward)
+#     else:
+#         self.safe_transfer(_token, msg.sender, _windowReward)
 
 
 @external
@@ -1420,6 +1476,7 @@ def claim_rewards(_token: address):
     lastProcessedWindow: uint256 = 0
     (rewardsAmount, lastProcessedWindow) = self._user_token_claimable_rewards(msg.sender, _token)
     self.user_token_claimed_window[msg.sender][_token] = lastProcessedWindow
+    log UserClaimWindowEnd(lastProcessedWindow)
 
     self.any_transfer(_token, msg.sender, rewardsAmount)
     log UserRewardsClaimed(lastProcessedWindow, _token, rewardsAmount)
@@ -1435,22 +1492,24 @@ def any_transfer(_token: address, _to: address, _value: uint256):
 
 # emergency
 
-@external
-def emergency_withdraw(_token: address, _amount: uint256, to: address):
-    assert msg.sender == self._admin()
-    if _token == ZERO_ADDRESS:
-        send(to, _amount)
-    else:
-        self.safe_transfer(_token, to, _amount)
-
-@external
-def emergency_withdraw_many(_tokens: address[30], _amounts: uint256[30], tos: address[30]):
-    assert msg.sender == self._admin()
-    for i in range(30):
-        _token: address = _tokens[i]
-        _amount: uint256 = _amounts[i]
-        to: address = tos[i]
-        if _token == ZERO_ADDRESS:
-            send(to, _amount)
-        else:
-            self.safe_transfer(_token, to, _amount)
+# todo uncomment
+# @external
+# def emergency_withdraw(_token: address, _amount: uint256, to: address):
+#     assert msg.sender == self._admin()
+#     if _token == ZERO_ADDRESS:
+#         send(to, _amount)
+#     else:
+#         self.safe_transfer(_token, to, _amount)
+#
+#
+# @external
+# def emergency_withdraw_many(_tokens: address[30], _amounts: uint256[30], tos: address[30]):
+#     assert msg.sender == self._admin()
+#     for i in range(30):
+#         _token: address = _tokens[i]
+#         _amount: uint256 = _amounts[i]
+#         to: address = tos[i]
+#         if _token == ZERO_ADDRESS:
+#             send(to, _amount)
+#         else:
+#             self.safe_transfer(_token, to, _amount)

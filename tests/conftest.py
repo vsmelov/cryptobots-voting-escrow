@@ -60,6 +60,16 @@ def theoretical_supply(chain, token):
 
 
 @pytest.fixture(scope="session")
+def owner(accounts):
+    yield accounts[0]
+
+
+@pytest.fixture(scope="session")
+def users(accounts):
+    yield accounts[1:]
+
+
+@pytest.fixture(scope="session")
 def alice(accounts):
     yield accounts[0]
 
