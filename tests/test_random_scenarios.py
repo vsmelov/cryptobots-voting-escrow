@@ -218,25 +218,31 @@ def generate_scenario(
 
 def share_estim(voting_escrow, window, user):
     assert window // EPOCH_SECONDS * EPOCH_SECONDS == window
-    n = 100
+    n = 400
     d = EPOCH_SECONDS // n
     assert d * n == EPOCH_SECONDS
     balances = [
         voting_escrow.balanceOfAtTimestamp(user, window + d * i)
-        for i in range(n + 1)
+        for i in range(n)
     ]
     totalSupplys = [
         voting_escrow.totalSupplyAtTimestamp(window + d * i)[1]
-        for i in range(n + 1)
+        for i in range(n)
     ]
-    points = []
-    for (x, y) in zip(balances, totalSupplys):
-        if y == 0:
-            points.append(0)
-        else:
-            points.append(x/y)
-    estimation_share = sum(points) / len(points)
-    return estimation_share
+    if sum(totalSupplys) == 0:
+        assert sum(balances) == 0
+        return 0
+    # print(f'share_estim     balances={[round(_/1e18, 4) for _ in balances]}')
+    # print(f'share_estim totalSupplys={[round(_/1e18, 4) for _ in totalSupplys]}')
+    return sum(balances) / sum(totalSupplys)
+    # points = []
+    # for (x, y) in zip(balances, totalSupplys):
+    #     if y == 0:
+    #         points.append(0)
+    #     else:
+    #         points.append(x/y)
+    # estimation_share = sum(points) / len(points)
+    # return estimation_share
 
 
 def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
@@ -255,6 +261,7 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
     for user in users:
         token.transfer(user, 1e6 * 1e18, {"from": owner})
         token.approve(voting_escrow, 2**256-1, {"from": user})
+    del user  # to avoid namespace collision
 
     scenario = generate_scenario(
         users=users,
@@ -298,6 +305,7 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                 till,
                 {"from": action.user},
             )
+            pprint.pprint(tx.events)
             assert voting_escrow.locked(action.user) == (action.amount, till // EPOCH_SECONDS * EPOCH_SECONDS)
         elif isinstance(action, UserLockIncreaseAmount):
             if voting_escrow.locked(action.user)[0] == 0:
@@ -307,10 +315,11 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                         {"from": action.user},
                     )
             elif chain.time() < voting_escrow.locked(action.user)[1]:
-                voting_escrow.increase_amount(
+                tx = voting_escrow.increase_amount(
                     action.amount,
                     {"from": action.user},
                 )
+                pprint.pprint(tx.events)
             else:
                 with brownie.reverts("Cannot add to expired lock. Withdraw"):
                     voting_escrow.increase_amount(
@@ -325,10 +334,11 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                         {"from": action.user},
                     )
             elif chain.time() < voting_escrow.locked(action.user)[1]:
-                voting_escrow.increase_unlock_time(
+                tx = voting_escrow.increase_unlock_time(
                     start_ts+action.increase_till,
                     {"from": action.user},
                 )
+                pprint.pprint(tx.events)
             else:
                 with brownie.reverts("Lock expired"):
                     voting_escrow.increase_unlock_time(
@@ -345,11 +355,13 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                 tx = voting_escrow.withdraw({"from": action.user})
                 assert tx.events['Withdraw']['value'] == locked_amount
                 print('withdrawn')
+                pprint.pprint(tx.events)
         elif isinstance(action, UserClaimRewards):
             tx = voting_escrow.claim_rewards(
                 token,
                 {"from": action.user},
             )
+            pprint.pprint(tx.events)
             window_start = tx.events['UserClaimWindowStart']['value']
             window_end = tx.events['UserClaimWindowEnd']['value']
 
@@ -358,12 +370,68 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
 
             rewards_estim = 0
             for w in range(window_start, window_end+EPOCH_SECONDS, EPOCH_SECONDS):
+                print(f'check rewards for {w=}')
                 window_rewards = voting_escrow.window_token_rewards(w, token)
                 share = share_estim(
                     voting_escrow=voting_escrow,
                     window=w,
                     user=action.user,
                 )
+                print(f'{w=} {window_rewards=} {share=}')
+                averageUserBalanaceOverWindow = voting_escrow.averageUserBalanaceOverWindow(action.user, w)
+                averageTotalSupplyOverWindow = voting_escrow.averageTotalSupplyOverWindow(w)
+                averageUserBalanaceOverWindowTx = voting_escrow.averageUserBalanaceOverWindowTx(action.user, w)
+                averageTotalSupplyOverWindowTx = voting_escrow.averageTotalSupplyOverWindowTx(w)
+                print(f'{w=}, averageUserBalanaceOverWindow={round(averageUserBalanaceOverWindow/1e18, 4)}, averageTotalSupplyOverWindow={round(averageTotalSupplyOverWindow/1e18, 4)}')
+
+                def get_history_epochs(voting_escrow):
+                    epoch = voting_escrow.epoch()
+                    result = []
+                    for i in range(0, epoch + 1):
+                        _ = voting_escrow.point_history(i)
+                        point = {
+                            'epoch': i,
+                            'bias': _[0],
+                            'slope': _[1],
+                            'ts': _[2],
+                            'blk': _[3],
+                        }
+                        result.append(point)
+                    return result
+
+                def get_history(window, voting_escrow):
+                    history_len = voting_escrow.integrated_totalSupply_over_window_history_index(window)
+                    result = []
+                    for index in range(0, history_len):
+                        _ = voting_escrow.integrated_totalSupply_over_window_history(window, index)
+                        record = {
+                            '_msg': _[0],
+                            'window': _[1],
+                            '_epoch': _[2],
+                            'bias_ts': _[3],
+                            'bias': _[4],
+                            'slope': _[5],
+                            '_ts0': _[6],
+                            '_ts1': _[7],
+                            'interval': _[8],
+                            'trapezoidArea': _[9],
+                            'avg': _[10],
+                        }
+                        result.append(record)
+                    return result
+
+                print(f'get_history_epochs:')
+                pprint.pprint(get_history_epochs(voting_escrow))
+                print(f'{get_history(w, voting_escrow)=}')
+
+                print(f'{averageUserBalanaceOverWindowTx.events=}')
+                print(f'{averageTotalSupplyOverWindowTx.events=}')
+
+                if averageTotalSupplyOverWindow == 0:
+                    assert averageUserBalanaceOverWindow == 0
+                else:
+                    assert share == averageUserBalanaceOverWindow / averageTotalSupplyOverWindow
+
                 rewards_estim += window_rewards * share
 
             estim = rewards_estim
@@ -373,8 +441,8 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
             else:
                 assert actual > 0
                 assert estim > 0
-                alpha = max(actual, estim) * 0.001 / min(actual, estim)
-                assert abs(actual - estim) / min(actual, estim) < alpha
+                alpha = max(actual, estim) * 0.01 / min(actual, estim)
+                assert abs(actual - estim) / min(actual, estim) < alpha, f"wrong {actual=} {estim=}"
         else:
             raise ValueError(action)
 

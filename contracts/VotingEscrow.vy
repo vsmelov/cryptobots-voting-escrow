@@ -424,6 +424,117 @@ def locked__end(_addr: address) -> uint256:
     return self.locked[_addr].end
 
 
+# xx debug purposes todo remove
+struct TotalSupplyHistory:
+    _msg: String[256]
+    window: uint256
+    _epoch: uint256
+    bias_ts: uint256
+    bias: int128
+    slope: int128
+    _ts0: uint256
+    _ts1: uint256
+    interval: uint256
+    trapezoidArea: uint256
+    avg: uint256
+
+integrated_totalSupply_over_window_history: public(HashMap[uint256, TotalSupplyHistory[100]])
+integrated_totalSupply_over_window_history_index: public(HashMap[uint256, uint256])
+
+event TotalSupplyHistorySet:
+    _window: uint256
+    _index: uint256
+    _record: TotalSupplyHistory
+
+event PointHistorySet:
+    _epoch: uint256
+    _point: Point
+
+
+@internal
+def handle_integrated_totalSupply_over_window(
+    _epoch: uint256,
+    last_point: Point,
+):
+    trapezoidArea: uint256 = 0
+    prev_point: Point = self.point_history[_epoch - 1]
+    _prev_point_window: uint256 = prev_point.ts / EPOCH_SECONDS * EPOCH_SECONDS
+    _last_point_window: uint256 = last_point.ts / EPOCH_SECONDS * EPOCH_SECONDS
+    if _prev_point_window < _last_point_window:
+        assert _last_point_window - _prev_point_window == EPOCH_SECONDS, "impossible: window_diff>EPOCH_SECONDS"
+
+        # finalize previous window aggregate
+        trapezoidArea = self.anyTrapezoidArea(
+            prev_point.ts,  # _bias_ts
+            prev_point.bias,  # _bias
+            prev_point.slope,  # _slope
+            prev_point.ts,  # _ts0
+            _last_point_window  # _ts1
+        )
+        self.integrated_totalSupply_over_window[_prev_point_window] += trapezoidArea
+
+        record: TotalSupplyHistory = TotalSupplyHistory({
+            _msg: "finalize",
+            window: _prev_point_window,  # window
+            _epoch: _epoch - 1,
+            bias_ts: prev_point.ts,  # _bias_ts
+            bias: prev_point.bias,  # _bias
+            slope: prev_point.slope,  # _slope
+            _ts0: prev_point.ts,  # _ts0
+            _ts1: _last_point_window,  # _ts1
+            interval: _last_point_window - prev_point.ts,  # interval
+            trapezoidArea: trapezoidArea,  # trapezoidArea
+            avg: trapezoidArea / (_last_point_window - prev_point.ts)
+        })
+        self.integrated_totalSupply_over_window_history[_prev_point_window][
+            self.integrated_totalSupply_over_window_history_index[_prev_point_window]
+        ] = record
+        log TotalSupplyHistorySet(
+            _prev_point_window,
+            self.integrated_totalSupply_over_window_history_index[_prev_point_window],
+            record
+        )
+        self.integrated_totalSupply_over_window_history_index[_prev_point_window] += 1
+
+        assert last_point.ts == _last_point_window, "impossible: no point at window start"
+        # no need to initialize integrated_totalSupply_over_window[_last_point_window] since interval=0
+    elif _prev_point_window == _last_point_window:
+        # extend aggregate
+        trapezoidArea = self.anyTrapezoidArea(
+            prev_point.ts,  # _bias_ts
+            prev_point.bias,  # _bias
+            prev_point.slope,  # _slope
+            prev_point.ts,  # _ts0
+            last_point.ts  # _ts1
+        )
+
+        record: TotalSupplyHistory = TotalSupplyHistory({
+            _msg: "extend",
+            window: _prev_point_window,
+            _epoch: _epoch - 1,
+            bias_ts: prev_point.ts,
+            bias: prev_point.bias,
+            slope: prev_point.slope,
+            _ts0: prev_point.ts,
+            _ts1: last_point.ts,
+            interval: last_point.ts - prev_point.ts,
+            trapezoidArea: trapezoidArea,
+            avg: trapezoidArea / (last_point.ts - prev_point.ts)
+        })
+        self.integrated_totalSupply_over_window_history[_prev_point_window][
+            self.integrated_totalSupply_over_window_history_index[_prev_point_window]
+        ] = record
+        log TotalSupplyHistorySet(
+            _prev_point_window,
+            self.integrated_totalSupply_over_window_history_index[_prev_point_window],
+            record
+        )
+        self.integrated_totalSupply_over_window_history_index[_prev_point_window] += 1
+        self.integrated_totalSupply_over_window[_prev_point_window] += trapezoidArea
+    else:  # _prev_point_window > _last_point_window
+        raise "impossible: prev window > last"
+
+
 @internal
 def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBalance):
     """
@@ -500,40 +611,13 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
             break
         else:
             self.point_history[_epoch] = last_point
+            log PointHistorySet(_epoch, last_point)
 
-        # handle integrated_totalSupply_over_window
-        # todo test
-        trapezoidArea: uint256 = 0
-        prev_point: Point = self.point_history[_epoch - 1]
-        _prev_point_window: uint256 = prev_point.ts / EPOCH_SECONDS * EPOCH_SECONDS
-        _last_point_window: uint256 = last_point.ts / EPOCH_SECONDS * EPOCH_SECONDS
-        if _prev_point_window < _last_point_window:
-            assert _last_point_window - _prev_point_window == EPOCH_SECONDS, "impossible: window_diff>EPOCH_SECONDS"
-
-            # finalize previous window aggregate
-            trapezoidArea = self.anyTrapezoidArea(
-                prev_point.ts,  # _bias_ts
-                prev_point.bias,  # _bias
-                prev_point.slope,  # _slope
-                prev_point.ts,  # _ts0
-                _last_point_window   # _ts1
-            )
-            self.integrated_totalSupply_over_window[_prev_point_window] += trapezoidArea
-
-            assert last_point.ts == _last_point_window, "impossible: no point at window start"
-            # no need to initialize integrated_totalSupply_over_window[_last_point_window] since interval=0
-        elif _prev_point_window == _last_point_window:
-            # extend aggregate
-            trapezoidArea = self.anyTrapezoidArea(
-                prev_point.ts,  # _bias_ts
-                prev_point.bias,  # _bias
-                prev_point.slope,  # _slope
-                prev_point.ts,  # _ts0
-                last_point.ts  # _ts1
-            )
-            self.integrated_totalSupply_over_window[checkpoint_ts] += trapezoidArea
-        else:  # _prev_point_window > _last_point_window
-            raise "impossible: prev window > last"
+        # note: it skipped in case of checkpoint_ts == block.timestamp (see above)
+        self.handle_integrated_totalSupply_over_window(
+            _epoch,
+            last_point,
+        )
 
     self.epoch = _epoch
     # Now point_history is filled until t=now
@@ -550,6 +634,7 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
 
     # Record the changed point into history
     self.point_history[_epoch] = last_point
+    log PointHistorySet(_epoch, last_point)  # xx todo aggregation handling xxxxx
 
     if addr != ZERO_ADDRESS:
         # Schedule the slope changes (slope is going down)
@@ -837,55 +922,56 @@ def balanceOf(addr: address, _t: uint256 = block.timestamp) -> uint256:
         return convert(last_point.bias, uint256)
 
 
-@external
-@view
-def balanceOfAt(addr: address, _block: uint256) -> uint256:
-    """
-    @notice Measure voting power of `addr` at block height `_block`
-    @dev Adheres to MiniMe `balanceOfAt` interface: https://github.com/Giveth/minime
-    @param addr User's wallet address
-    @param _block Block to calculate the voting power at
-    @return Voting power
-    """
-    # Copying and pasting totalSupply code because Vyper cannot pass by
-    # reference yet
-    assert _block <= block.number
-
-    # Binary search
-    _min: uint256 = 0
-    _max: uint256 = self.user_point_epoch[addr]
-    for i in range(128):  # Will be always enough for 128-bit numbers
-        if _min >= _max:
-            break
-        _mid: uint256 = (_min + _max + 1) / 2
-        if self.user_point_history[addr][_mid].blk <= _block:
-            _min = _mid
-        else:
-            _max = _mid - 1
-
-    upoint: Point = self.user_point_history[addr][_min]
-
-    max_epoch: uint256 = self.epoch
-    _epoch: uint256 = self.find_block_epoch(_block, max_epoch)
-    point_0: Point = self.point_history[_epoch]
-    d_block: uint256 = 0
-    d_t: uint256 = 0
-    if _epoch < max_epoch:
-        point_1: Point = self.point_history[_epoch + 1]
-        d_block = point_1.blk - point_0.blk
-        d_t = point_1.ts - point_0.ts
-    else:
-        d_block = block.number - point_0.blk
-        d_t = block.timestamp - point_0.ts
-    block_time: uint256 = point_0.ts
-    if d_block != 0:
-        block_time += d_t * (_block - point_0.blk) / d_block
-
-    upoint.bias -= upoint.slope * convert(block_time - upoint.ts, int128)
-    if upoint.bias >= 0:
-        return convert(upoint.bias, uint256)
-    else:
-        return 0
+# xx todo uncomment
+# @external
+# @view
+# def balanceOfAt(addr: address, _block: uint256) -> uint256:
+#     """
+#     @notice Measure voting power of `addr` at block height `_block`
+#     @dev Adheres to MiniMe `balanceOfAt` interface: https://github.com/Giveth/minime
+#     @param addr User's wallet address
+#     @param _block Block to calculate the voting power at
+#     @return Voting power
+#     """
+#     # Copying and pasting totalSupply code because Vyper cannot pass by
+#     # reference yet
+#     assert _block <= block.number
+#
+#     # Binary search
+#     _min: uint256 = 0
+#     _max: uint256 = self.user_point_epoch[addr]
+#     for i in range(128):  # Will be always enough for 128-bit numbers
+#         if _min >= _max:
+#             break
+#         _mid: uint256 = (_min + _max + 1) / 2
+#         if self.user_point_history[addr][_mid].blk <= _block:
+#             _min = _mid
+#         else:
+#             _max = _mid - 1
+#
+#     upoint: Point = self.user_point_history[addr][_min]
+#
+#     max_epoch: uint256 = self.epoch
+#     _epoch: uint256 = self.find_block_epoch(_block, max_epoch)
+#     point_0: Point = self.point_history[_epoch]
+#     d_block: uint256 = 0
+#     d_t: uint256 = 0
+#     if _epoch < max_epoch:
+#         point_1: Point = self.point_history[_epoch + 1]
+#         d_block = point_1.blk - point_0.blk
+#         d_t = point_1.ts - point_0.ts
+#     else:
+#         d_block = block.number - point_0.blk
+#         d_t = block.timestamp - point_0.ts
+#     block_time: uint256 = point_0.ts
+#     if d_block != 0:
+#         block_time += d_t * (_block - point_0.blk) / d_block
+#
+#     upoint.bias -= upoint.slope * convert(block_time - upoint.ts, int128)
+#     if upoint.bias >= 0:
+#         return convert(upoint.bias, uint256)
+#     else:
+#         return 0
 
 
 @external
@@ -913,10 +999,6 @@ def balanceOfAtTimestamp(addr: address, _ts: uint256) -> uint256:
             _max = _mid - 1
 
     upoint: Point = self.user_point_history[addr][_min]
-
-    max_epoch: uint256 = self.epoch
-    _epoch: uint256 = self.find_timestamp_epoch(_ts, max_epoch)
-
     upoint.bias -= upoint.slope * convert(_ts - upoint.ts, int128)
     if upoint.bias >= 0:
         return convert(upoint.bias, uint256)
@@ -997,30 +1079,31 @@ def _totalSupplyAtTimestamp(_ts: uint256) -> (uint256, uint256):
     return target_epoch, self.supply_at(point, _ts)
 
 
-@external
-@view
-def totalSupplyAt(_block: uint256) -> uint256:
-    """
-    @notice Calculate total voting power at some point in the past
-    @param _block Block to calculate the total voting power at
-    @return Total voting power at `_block`
-    """
-    assert _block <= block.number
-    _epoch: uint256 = self.epoch
-    target_epoch: uint256 = self.find_block_epoch(_block, _epoch)
-
-    point: Point = self.point_history[target_epoch]
-    dt: uint256 = 0
-    if target_epoch < _epoch:
-        point_next: Point = self.point_history[target_epoch + 1]
-        if point.blk != point_next.blk:
-            dt = (_block - point.blk) * (point_next.ts - point.ts) / (point_next.blk - point.blk)
-    else:
-        if point.blk != block.number:
-            dt = (_block - point.blk) * (block.timestamp - point.ts) / (block.number - point.blk)
-    # Now dt contains info on how far are we beyond point
-
-    return self.supply_at(point, point.ts + dt)
+# xx todo uncomment
+# @external
+# @view
+# def totalSupplyAt(_block: uint256) -> uint256:
+#     """
+#     @notice Calculate total voting power at some point in the past
+#     @param _block Block to calculate the total voting power at
+#     @return Total voting power at `_block`
+#     """
+#     assert _block <= block.number
+#     _epoch: uint256 = self.epoch
+#     target_epoch: uint256 = self.find_block_epoch(_block, _epoch)
+#
+#     point: Point = self.point_history[target_epoch]
+#     dt: uint256 = 0
+#     if target_epoch < _epoch:
+#         point_next: Point = self.point_history[target_epoch + 1]
+#         if point.blk != point_next.blk:
+#             dt = (_block - point.blk) * (point_next.ts - point.ts) / (point_next.blk - point.blk)
+#     else:
+#         if point.blk != block.number:
+#             dt = (_block - point.blk) * (block.timestamp - point.ts) / (block.number - point.blk)
+#     # Now dt contains info on how far are we beyond point
+#
+#     return self.supply_at(point, point.ts + dt)
 
 
 # Dummy methods for compatibility with Aragon
@@ -1210,6 +1293,11 @@ event _averageTotalSupplyOverEpoch:
 
 
 @external
+def averageTotalSupplyOverWindowTx(_window: uint256) -> uint256:
+    return self._averageTotalSupplyOverWindow(_window)
+
+
+@external
 @view
 def averageTotalSupplyOverWindow(_window: uint256) -> uint256:
     return self._averageTotalSupplyOverWindow(_window)
@@ -1224,13 +1312,28 @@ event _averageTotalSupplyOverWindow_NewWindow:
     trapezoidArea: uint256
 
 
+event _averageTotalSupplyOverWindow_PartlyAggregatedWindow:
+    _window: uint256  # _window
+    aggregated: uint256  # aggregated
+    bias_ts: uint256  # bias ts
+    bias: int128  # bias
+    slope: int128  # slope
+    ts_start: uint256  # ts start
+    ts_end: uint256  # ts end
+
+
+event _averageTotalSupplyOverWindow_FullyAggregatedWindow:
+    _window: uint256  # _window
+    aggregated: uint256  # aggregated
+
+
 @internal
 @view
 def _averageTotalSupplyOverWindow(_window: uint256) -> uint256:
     assert _window < self._currentWindow(), "incorrect window"
     trapezoidArea: uint256 = 0
     _epoch: uint256 = self.epoch
-    if self.point_history[_epoch].ts < _window:
+    if self.point_history[_epoch].ts < _window:  # xx todo: signs
         # you know the last point, and only need to integrate the curve
         # do not forget about slope changes! (it's handled inside _totalSupplyAtTimestamp)
         target_epoch_start: uint256 = 0
@@ -1238,6 +1341,7 @@ def _averageTotalSupplyOverWindow(_window: uint256) -> uint256:
         target_epoch_end: uint256 = 0
         total_supply_end: uint256 = 0
         target_epoch_start, total_supply_start = self._totalSupplyAtTimestamp(_window)
+        # note: total_supply turns 0 only in window starts
         target_epoch_end, total_supply_end = self._totalSupplyAtTimestamp(_window + EPOCH_SECONDS)
         assert _epoch == target_epoch_start, "impossible: not last epoch"
         assert _epoch == target_epoch_end, "impossible: not last epoch"
@@ -1250,7 +1354,7 @@ def _averageTotalSupplyOverWindow(_window: uint256) -> uint256:
             total_supply_end,
             trapezoidArea,
         )
-    elif self.point_history[_epoch].ts < _window + EPOCH_SECONDS:
+    elif self.point_history[_epoch].ts <= _window + EPOCH_SECONDS:  # xx todo: signs
         # the window is partially aggregated in interval [_window; self.point_history[_epoch].ts]
         # so we calculate trapezoid area in [self.point_history[_epoch].ts; _window + EPOCH_SECONDS]
         trapezoidArea = self.anyTrapezoidArea(
@@ -1260,10 +1364,24 @@ def _averageTotalSupplyOverWindow(_window: uint256) -> uint256:
             self.point_history[_epoch].ts,
             _window + EPOCH_SECONDS
         )
-        trapezoidArea += self.integrated_totalSupply_over_window[_window]
+        aggregated: uint256 = self.integrated_totalSupply_over_window[_window]
+        log _averageTotalSupplyOverWindow_PartlyAggregatedWindow(
+            _window,  # _window
+            aggregated,  # aggregated
+            self.point_history[_epoch].ts,  # bias ts
+            self.point_history[_epoch].bias,  # bias
+            self.point_history[_epoch].slope,  # slope
+            self.point_history[_epoch].ts,  # ts start
+            _window + EPOCH_SECONDS  # ts end
+        )
+        trapezoidArea += aggregated
     else: # _window + EPOCH_SECONDS <= self.point_history[_epoch].ts
         # the window is fully aggregated
         trapezoidArea = self.integrated_totalSupply_over_window[_window]
+        log _averageTotalSupplyOverWindow_FullyAggregatedWindow(
+            _window,  # _window
+            trapezoidArea  # aggregated
+        )
 
     return trapezoidArea / EPOCH_SECONDS
 
