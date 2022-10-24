@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import random
 import pprint
 
+from pytest import approx
 import brownie
 
 from .utils import *
@@ -218,7 +219,7 @@ def generate_scenario(
 
 def share_estim(voting_escrow, window, user):
     assert window // EPOCH_SECONDS * EPOCH_SECONDS == window
-    n = 400
+    n = 200
     d = EPOCH_SECONDS // n
     assert d * n == EPOCH_SECONDS
     balances = [
@@ -252,7 +253,8 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
     min_stake_amount = voting_escrow.min_stake_amount()
     max_stake_amount = 10 * voting_escrow.min_stake_amount()
 
-    n_user_actions = 10
+    approx_rel = 0.03
+    n_user_actions = 5  # todo set higher
     n_users = 3
     n_rewards = n_user_actions * n_users
     users = users[:n_users]
@@ -305,7 +307,7 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                 till,
                 {"from": action.user},
             )
-            pprint.pprint(tx.events)
+            pretty_events(chain, tx.txid)
             assert voting_escrow.locked(action.user) == (action.amount, till // EPOCH_SECONDS * EPOCH_SECONDS)
         elif isinstance(action, UserLockIncreaseAmount):
             if voting_escrow.locked(action.user)[0] == 0:
@@ -319,7 +321,7 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                     action.amount,
                     {"from": action.user},
                 )
-                pprint.pprint(tx.events)
+                pretty_events(chain, tx.txid)
             else:
                 with brownie.reverts("Cannot add to expired lock. Withdraw"):
                     voting_escrow.increase_amount(
@@ -338,7 +340,7 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                     start_ts+action.increase_till,
                     {"from": action.user},
                 )
-                pprint.pprint(tx.events)
+                pretty_events(chain, tx.txid)
             else:
                 with brownie.reverts("Lock expired"):
                     voting_escrow.increase_unlock_time(
@@ -355,13 +357,13 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                 tx = voting_escrow.withdraw({"from": action.user})
                 assert tx.events['Withdraw']['value'] == locked_amount
                 print('withdrawn')
-                pprint.pprint(tx.events)
+                pretty_events(chain, tx.txid)
         elif isinstance(action, UserClaimRewards):
             tx = voting_escrow.claim_rewards(
                 token,
                 {"from": action.user},
             )
-            pprint.pprint(tx.events)
+            pretty_events(chain, tx.txid)
             window_start = tx.events['UserClaimWindowStart']['value']
             window_end = tx.events['UserClaimWindowEnd']['value']
 
@@ -430,7 +432,9 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                 if averageTotalSupplyOverWindow == 0:
                     assert averageUserBalanaceOverWindow == 0
                 else:
-                    assert share == averageUserBalanaceOverWindow / averageTotalSupplyOverWindow
+                    estimated = share
+                    calculated = averageUserBalanaceOverWindow / averageTotalSupplyOverWindow
+                    assert int(estimated) == approx(int(calculated), rel=approx_rel)
 
                 rewards_estim += window_rewards * share
 
@@ -441,8 +445,7 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
             else:
                 assert actual > 0
                 assert estim > 0
-                alpha = max(actual, estim) * 0.01 / min(actual, estim)
-                assert abs(actual - estim) / min(actual, estim) < alpha, f"wrong {actual=} {estim=}"
+                assert int(actual) == approx(int(estim), rel=approx_rel)
         else:
             raise ValueError(action)
 

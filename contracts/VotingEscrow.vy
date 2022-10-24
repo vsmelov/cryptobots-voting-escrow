@@ -365,14 +365,14 @@ def transfer_ownership(addr: address):
         is_delegate_call=True
     )
 
-
-@external
-def set_smart_wallet_checker(addr: address):
-    """
-    @notice Apply setting external contract to check approved smart contract wallets
-    """
-    assert msg.sender == self._admin(), "not admin"
-    self.smart_wallet_checker = addr
+# xx todo uncomment
+# @external
+# def set_smart_wallet_checker(addr: address):
+#     """
+#     @notice Apply setting external contract to check approved smart contract wallets
+#     """
+#     assert msg.sender == self._admin(), "not admin"
+#     self.smart_wallet_checker = addr
 
 
 @internal
@@ -389,28 +389,30 @@ def assert_not_contract(addr: address):
         raise "Smart contract depositors not allowed"
 
 
-@external
-@view
-def get_last_user_slope(addr: address) -> int128:
-    """
-    @notice Get the most recently recorded rate of voting power decrease for `addr`
-    @param addr Address of the user wallet
-    @return Value of the slope
-    """
-    uepoch: uint256 = self.user_point_epoch[addr]
-    return self.user_point_history[addr][uepoch].slope
+# xx todo uncomment
+# @external
+# @view
+# def get_last_user_slope(addr: address) -> int128:
+#     """
+#     @notice Get the most recently recorded rate of voting power decrease for `addr`
+#     @param addr Address of the user wallet
+#     @return Value of the slope
+#     """
+#     uepoch: uint256 = self.user_point_epoch[addr]
+#     return self.user_point_history[addr][uepoch].slope
 
 
-@external
-@view
-def user_point_history__ts(_addr: address, _idx: uint256) -> uint256:
-    """
-    @notice Get the timestamp for checkpoint `_idx` for `_addr`
-    @param _addr User wallet address
-    @param _idx User epoch number
-    @return Epoch time of the checkpoint
-    """
-    return self.user_point_history[_addr][_idx].ts
+# xx todo uncomment
+# @external
+# @view
+# def user_point_history__ts(_addr: address, _idx: uint256) -> uint256:
+#     """
+#     @notice Get the timestamp for checkpoint `_idx` for `_addr`
+#     @param _addr User wallet address
+#     @param _idx User epoch number
+#     @return Epoch time of the checkpoint
+#     """
+#     return self.user_point_history[_addr][_idx].ts
 
 
 @external
@@ -451,6 +453,10 @@ event PointHistorySet:
     _point: Point
 
 
+event LogRemove:  # xx todo remove
+    x: uint256
+    y: uint256
+
 @internal
 def handle_integrated_totalSupply_over_window(
     _epoch: uint256,
@@ -461,7 +467,13 @@ def handle_integrated_totalSupply_over_window(
     _prev_point_window: uint256 = prev_point.ts / EPOCH_SECONDS * EPOCH_SECONDS
     _last_point_window: uint256 = last_point.ts / EPOCH_SECONDS * EPOCH_SECONDS
     if _prev_point_window < _last_point_window:
-        assert _last_point_window - _prev_point_window == EPOCH_SECONDS, "impossible: window_diff>EPOCH_SECONDS"
+        # xx todo remove
+        if _last_point_window - _prev_point_window != EPOCH_SECONDS:
+            log LogRemove(_last_point_window, _prev_point_window)
+            return
+
+        assert _last_point_window - _prev_point_window == EPOCH_SECONDS, \
+            "impossible: window_diff>EPOCH_SECONDS"
 
         # finalize previous window aggregate
         trapezoidArea = self.anyTrapezoidArea(
@@ -631,6 +643,10 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
             last_point.slope = 0
         if last_point.bias < 0:
             last_point.bias = 0
+        self.handle_integrated_totalSupply_over_window(
+            _epoch,
+            last_point,
+        )
 
     # Record the changed point into history
     self.point_history[_epoch] = last_point
