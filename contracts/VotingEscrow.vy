@@ -63,6 +63,13 @@ CREATE_LOCK_TYPE: constant(int128) = 1
 INCREASE_LOCK_AMOUNT: constant(int128) = 2
 INCREASE_UNLOCK_TIME: constant(int128) = 3
 
+stuckWindowRewardClaimed: public(HashMap[uint256, bool])
+
+event StuckWindowRewardClaimed:
+    epoch: indexed(uint256)
+    token: indexed(address)
+    amount: uint256
+
 
 event TransferOwnership:
     admin: address
@@ -111,6 +118,7 @@ ADMIN_HASH: constant(bytes32) = keccak256("admin")
 def admin() -> address:
     return self._admin()
 
+
 @internal
 @view
 def _admin() -> address:
@@ -119,19 +127,36 @@ def _admin() -> address:
 
 last_manual_checkpoint_timestamp: public(uint256)
 MIN_DELAY_BETWEEN_MANUAL_CHECKPOINT_HASH: constant(bytes32) = keccak256("min_delay_between_manual_checkpoint")
+EMERGENCY_HASH: constant(bytes32) = keccak256("emergency")
+
 
 @external
 @view
 def min_delay_between_manual_checkpoint() -> uint256:
-    return self._min_delay_between_manual_checkpoint()
+    return self.storageUInt256[MIN_DELAY_BETWEEN_MANUAL_CHECKPOINT_HASH]
+
 
 @internal
 @view
 def _min_delay_between_manual_checkpoint() -> uint256:
     return self.storageUInt256[MIN_DELAY_BETWEEN_MANUAL_CHECKPOINT_HASH]
 
+
+@internal
+@view
+def _emergency() -> bool:
+    return self.storageBool[EMERGENCY_HASH]
+
+
+@external
+@view
+def emergency() -> bool:
+    return self._emergency()
+
+
 event MinDelayBetweenManualCheckpointSet:
     value: uint256
+
 
 @external
 def set_min_delay_between_manual_checkpoint(_value: uint256):
@@ -146,20 +171,24 @@ supply: public(uint256)
 
 locked: public(HashMap[address, LockedBalance])
 
+integrated_totalSupply_over_window: public(HashMap[uint256, uint256])  # timestamp of the window start -> aggregated value (assuming checkpoint will not change)
+user_token_claimed_window: public(HashMap[address, HashMap[address, uint256]])  # user -> token -> last claimed window
+user_token_claimed_window_start: public(HashMap[address, uint256])  # user -> first unclaimed window
+window_token_rewards: public(HashMap[uint256, HashMap[address, uint256]])  # epoch -> token -> totalRewardsAmount
+
 epoch: public(uint256)
 point_history: public(Point[100000000000000000000000000000])  # epoch -> unsigned point
 user_point_history: public(HashMap[address, Point[1000000000]])  # user -> Point[user_epoch]
-user_point_epoch: public(HashMap[address, uint256])
+user_point_epoch: public(HashMap[address, uint256])  # user -> current user epoch (its different scale with just epochs)
 slope_changes: public(HashMap[uint256, int128])  # time -> signed slope change
-slope_changes_keys: public(uint256[100000])  # todo remove
-slope_changes_keys_next_index: public(uint256)
+
+# debugging information
+# slope_changes_keys: public(uint256[100000])
+# slope_changes_keys_next_index: public(uint256)
+
 pool_members: public(uint256)  # how many participants are already in the pool
 max_pool_members: public(uint256)  # maximum number of the pool participants
 min_stake_amount: public(uint256)  # min amount to stake (or increase)
-
-# Aragon's view methods for compatibility
-controller: public(address)  # todo remove never used
-transfersEnabled: public(bool)  # todo remove never used
 
 name: public(String[64])
 symbol: public(String[32])
@@ -174,36 +203,48 @@ increase_amount_disabled: public(bool)
 increase_unlock_time_disabled: public(bool)
 create_lock_disabled: public(bool)
 withdraw_disabled: public(bool)
-emergency: public(bool)  # warning: cannot be reverted!
+
 
 event IncreaseAmountDisabledSet:
     value: bool
 
+
 event IncreaseUnlockTimeDisabledSet:
     value: bool
+
 
 event CreateLockDisabledSet:
     value: bool
 
+
 event WithdrawDisabledSet:
     value: bool
+
 
 event MinStakeAmountSet:
     value: uint256
 
+
 event MaxPoolMembersSet:
     value: uint256
+
 
 event Emergency:
     pass
 
 
+event TransferNative:
+    to: indexed(address)
+    value: uint256
+
+
 @external
 def enable_emergency():
-    assert msg.sender == self._admin()
-    assert not self.emergency
-    self.emergency = True
-    log Emergency()
+    raw_call(
+        self.settings,
+        method_id("enable_emergency()"),
+        is_delegate_call=True
+    )
 
 
 @external
@@ -255,56 +296,14 @@ def set_increase_unlock_time_disabled(_value: bool):
 
 
 @external
-def pause():
-    assert msg.sender == self._admin()
-
-    if not self.withdraw_disabled:
-        self.withdraw_disabled = True
-        log WithdrawDisabledSet(True)
-
-    if not self.create_lock_disabled:
-        self.create_lock_disabled = True
-        log CreateLockDisabledSet(True)
-
-    if not self.increase_amount_disabled:
-        self.increase_amount_disabled = True
-        log IncreaseAmountDisabledSet(True)
-
-    if not self.increase_unlock_time_disabled:
-        self.increase_unlock_time_disabled = True
-        log IncreaseUnlockTimeDisabledSet(True)
-
-
-@external
-def unpause():
-    assert msg.sender == self._admin()
-
-    if self.withdraw_disabled:
-        self.withdraw_disabled = False
-        log WithdrawDisabledSet(False)
-
-    if self.create_lock_disabled:
-        self.create_lock_disabled = False
-        log CreateLockDisabledSet(False)
-
-    if self.increase_amount_disabled:
-        self.increase_amount_disabled = False
-        log IncreaseAmountDisabledSet(False)
-
-    if self.increase_unlock_time_disabled:
-        self.increase_unlock_time_disabled = False
-        log IncreaseUnlockTimeDisabledSet(False)
-
-
-@external
 def __init__(
-        settings_addr: address,
-        token_addr: address,
-        _name: String[64],
-        _symbol: String[32],
-        _version: String[32],
-        _max_pool_members: uint256,
-        _min_stake_amount: uint256,
+    settings_addr: address,
+    token_addr: address,
+    _name: String[64],
+    _symbol: String[32],
+    _version: String[32],
+    _max_pool_members: uint256,
+    _min_stake_amount: uint256,
 ):
     """
     @notice Contract constructor
@@ -319,8 +318,6 @@ def __init__(
     self.token = token_addr
     self.point_history[0].blk = block.number
     self.point_history[0].ts = block.timestamp
-    self.controller = msg.sender
-    self.transfersEnabled = True
 
     _decimals: uint256 = ERC20(token_addr).decimals()
     assert _decimals <= 255
@@ -330,7 +327,7 @@ def __init__(
     self.symbol = _symbol
     self.version = _version
 
-    self.slope_changes_keys_next_index = 0  # todo remove
+    # self.slope_changes_keys_next_index = 0  # debugging
 
     self.max_pool_members = _max_pool_members
     self.min_stake_amount = _min_stake_amount
@@ -372,39 +369,126 @@ def assert_not_contract(addr: address):
         raise "Smart contract depositors not allowed"
 
 
-@external
-@view
-def get_last_user_slope(addr: address) -> int128:
-    """
-    @notice Get the most recently recorded rate of voting power decrease for `addr`
-    @param addr Address of the user wallet
-    @return Value of the slope
-    """
-    uepoch: uint256 = self.user_point_epoch[addr]
-    return self.user_point_history[addr][uepoch].slope
+# debugging
+struct TotalSupplyHistory:
+    _msg: String[256]
+    window: uint256
+    _epoch: uint256
+    bias_ts: uint256
+    bias: int128
+    slope: int128
+    _ts0: uint256
+    _ts1: uint256
+    interval: uint256
+    trapezoidArea: uint256
+    avg: uint256
+
+integrated_totalSupply_over_window_history: public(HashMap[uint256, TotalSupplyHistory[100000]])
+integrated_totalSupply_over_window_history_index: public(HashMap[uint256, uint256])
+
+event TotalSupplyHistorySet:
+    _window: uint256
+    _index: uint256
+    _record: TotalSupplyHistory
+
+event PointHistorySet:
+    _epoch: uint256
+    _point: Point
 
 
-@external
-@view
-def user_point_history__ts(_addr: address, _idx: uint256) -> uint256:
-    """
-    @notice Get the timestamp for checkpoint `_idx` for `_addr`
-    @param _addr User wallet address
-    @param _idx User epoch number
-    @return Epoch time of the checkpoint
-    """
-    return self.user_point_history[_addr][_idx].ts
+@internal
+def handle_integrated_totalSupply_over_window(
+    _msg: String[256],
+    _epoch: uint256,
+    last_point: Point,
+):
+    trapezoidArea: uint256 = 0
+    prev_point: Point = self.point_history[_epoch - 1]
+    _prev_point_window: uint256 = prev_point.ts / EPOCH_SECONDS * EPOCH_SECONDS
+    _last_point_window: uint256 = last_point.ts / EPOCH_SECONDS * EPOCH_SECONDS
+    if _prev_point_window < _last_point_window:
+        assert _last_point_window - _prev_point_window == EPOCH_SECONDS or _epoch == 1, \
+            "impossible: window_diff>EPOCH_SECONDS"
 
+        # finalize previous window aggregate
+        trapezoidArea = self.anyTrapezoidArea(
+            prev_point.ts,  # _bias_ts
+            prev_point.bias,  # _bias
+            prev_point.slope,  # _slope
+            prev_point.ts,  # _ts0
+            _last_point_window  # _ts1
+        )
+        self.integrated_totalSupply_over_window[_prev_point_window] += trapezoidArea
 
-@external
-@view
-def locked__end(_addr: address) -> uint256:
-    """
-    @notice Get timestamp when `_addr`'s lock finishes
-    @param _addr User wallet
-    @return Epoch time of the lock end
-    """
-    return self.locked[_addr].end
+        # debugging
+        avg: uint256 = convert(last_point.bias, uint256)
+        if _last_point_window != prev_point.ts:
+            avg = trapezoidArea / (_last_point_window - prev_point.ts)
+        record: TotalSupplyHistory = TotalSupplyHistory({
+            _msg: "finalize",
+            window: _prev_point_window,  # window
+            _epoch: _epoch - 1,
+            bias_ts: prev_point.ts,  # _bias_ts
+            bias: prev_point.bias,  # _bias
+            slope: prev_point.slope,  # _slope
+            _ts0: prev_point.ts,  # _ts0
+            _ts1: _last_point_window,  # _ts1
+            interval: _last_point_window - prev_point.ts,  # interval
+            trapezoidArea: trapezoidArea,  # trapezoidArea
+            avg: avg
+        })
+        self.integrated_totalSupply_over_window_history[_prev_point_window][
+            self.integrated_totalSupply_over_window_history_index[_prev_point_window]
+        ] = record
+        log TotalSupplyHistorySet(
+            _prev_point_window,
+            self.integrated_totalSupply_over_window_history_index[_prev_point_window],
+            record
+        )
+        self.integrated_totalSupply_over_window_history_index[_prev_point_window] += 1
+
+        assert last_point.ts == _last_point_window or _epoch == 1, "impossible: no point at window start"
+        # no need to initialize integrated_totalSupply_over_window[_last_point_window] since interval=0
+    elif _prev_point_window == _last_point_window:
+        # extend aggregate
+        trapezoidArea = self.anyTrapezoidArea(
+            prev_point.ts,  # _bias_ts
+            prev_point.bias,  # _bias
+            prev_point.slope,  # _slope
+            prev_point.ts,  # _ts0
+            last_point.ts  # _ts1
+        )
+
+        # debugging
+        avg: uint256 = convert(last_point.bias, uint256)
+        if last_point.ts != prev_point.ts:
+            avg = trapezoidArea / (last_point.ts - prev_point.ts)
+        record: TotalSupplyHistory = TotalSupplyHistory({
+            _msg: "extend",
+            window: _prev_point_window,
+            _epoch: _epoch - 1,
+            bias_ts: prev_point.ts,
+            bias: prev_point.bias,
+            slope: prev_point.slope,
+            _ts0: prev_point.ts,
+            _ts1: last_point.ts,
+            interval: last_point.ts - prev_point.ts,
+            trapezoidArea: trapezoidArea,
+            avg: avg
+        })
+        self.integrated_totalSupply_over_window_history[_prev_point_window][
+            self.integrated_totalSupply_over_window_history_index[_prev_point_window]
+        ] = record
+        log TotalSupplyHistorySet(
+            _prev_point_window,
+            self.integrated_totalSupply_over_window_history_index[_prev_point_window],
+            record
+        )
+        self.integrated_totalSupply_over_window_history_index[_prev_point_window] += 1
+
+        self.integrated_totalSupply_over_window[_prev_point_window] += trapezoidArea
+    else:  # _prev_point_window > _last_point_window
+        raise "impossible: prev window > last"
 
 
 @internal
@@ -425,7 +509,7 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
         # Calculate slopes and biases
         # Kept at zero when they have to
         if old_locked.end > block.timestamp and old_locked.amount > 0:
-            u_old.slope = old_locked.amount / convert(MAXTIME, int128)  # todo why??
+            u_old.slope = old_locked.amount / convert(MAXTIME, int128)
             u_old.bias = u_old.slope * convert(old_locked.end - block.timestamp, int128)
         if new_locked.end > block.timestamp and new_locked.amount > 0:
             u_new.slope = new_locked.amount / convert(MAXTIME, int128)
@@ -444,7 +528,6 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
     last_point: Point = Point({bias: 0, slope: 0, ts: block.timestamp, blk: block.number})
     if _epoch > 0:
         last_point = self.point_history[_epoch]
-    last_checkpoint: uint256 = last_point.ts
     # initial_last_point is used for extrapolation to calculate block number
     # (approximately, for *At methods) and save them
     # as we cannot figure that out exactly from inside the contract
@@ -456,31 +539,42 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
     # But that's ok b/c we know the block in such case
 
     # Go over weeks to fill history and calculate what the current point is
-    t_i: uint256 = (last_checkpoint / EPOCH_SECONDS) * EPOCH_SECONDS
+    checkpoint_ts: uint256 = (last_point.ts / EPOCH_SECONDS) * EPOCH_SECONDS
     for i in range(255):
         # Hopefully it won't happen that this won't get used in 5 years!
         # If it does, users will be able to withdraw but vote weight will be broken
-        t_i += EPOCH_SECONDS
+        checkpoint_ts += EPOCH_SECONDS
         d_slope: int128 = 0
-        if t_i > block.timestamp:
-            t_i = block.timestamp
+        if checkpoint_ts > block.timestamp:
+            checkpoint_ts = block.timestamp  # when we crossed all window checkpoints lets make a checkpoint at NOW
         else:
-            d_slope = self.slope_changes[t_i]
-        last_point.bias -= last_point.slope * convert(t_i - last_checkpoint, int128)
+            d_slope = self.slope_changes[checkpoint_ts]
+
+        # set attributes of the new checkpoint
+        last_point.bias -= last_point.slope * convert(checkpoint_ts - last_point.ts, int128)
         last_point.slope += d_slope
         if last_point.bias < 0:  # This can happen
             last_point.bias = 0
         if last_point.slope < 0:  # This cannot happen - just in case
             last_point.slope = 0
-        last_checkpoint = t_i
-        last_point.ts = t_i
-        last_point.blk = initial_last_point.blk + block_slope * (t_i - initial_last_point.ts) / MULTIPLIER
+        last_point.ts = checkpoint_ts
+        last_point.blk = initial_last_point.blk + \
+                         block_slope * (checkpoint_ts - initial_last_point.ts) / MULTIPLIER
+
         _epoch += 1
-        if t_i == block.timestamp:
+        if checkpoint_ts == block.timestamp:
             last_point.blk = block.number
             break
         else:
             self.point_history[_epoch] = last_point
+            log PointHistorySet(_epoch, last_point)
+
+        # note: it skipped in case of checkpoint_ts == block.timestamp (see above)
+        self.handle_integrated_totalSupply_over_window(
+            "iter",
+            _epoch,
+            last_point,
+        )
 
     self.epoch = _epoch
     # Now point_history is filled until t=now
@@ -494,9 +588,15 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
             last_point.slope = 0
         if last_point.bias < 0:
             last_point.bias = 0
+        self.handle_integrated_totalSupply_over_window(
+            "final",
+            _epoch,
+            last_point,
+        )
 
     # Record the changed point into history
     self.point_history[_epoch] = last_point
+    log PointHistorySet(_epoch, last_point)
 
     if addr != ZERO_ADDRESS:
         # Schedule the slope changes (slope is going down)
@@ -508,15 +608,15 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
             if new_locked.end == old_locked.end:
                 old_dslope -= u_new.slope  # It was a new deposit, not extension
             self.slope_changes[old_locked.end] = old_dslope
-            self.slope_changes_keys[self.slope_changes_keys_next_index] = old_locked.end  # todo remove
-            self.slope_changes_keys_next_index += 1
+            # self.slope_changes_keys[self.slope_changes_keys_next_index] = old_locked.end  # debugging
+            # self.slope_changes_keys_next_index += 1
 
         if new_locked.end > block.timestamp:
             if new_locked.end > old_locked.end:
                 new_dslope -= u_new.slope  # old slope disappeared at this point
                 self.slope_changes[new_locked.end] = new_dslope
-                self.slope_changes_keys[self.slope_changes_keys_next_index] = new_locked.end  # todo remove
-                self.slope_changes_keys_next_index += 1
+                # self.slope_changes_keys[self.slope_changes_keys_next_index] = new_locked.end  # debugging
+                # self.slope_changes_keys_next_index += 1
 
             # else: we recorded it already in old_dslope
 
@@ -590,7 +690,7 @@ def deposit_for(_addr: address, _value: uint256):
     @param _value Amount to add to user's lock
     """
     assert not self.increase_amount_disabled, "increase amount disabled"
-    assert not self.emergency, "not allowed in emergency"
+    assert not self._emergency(), "not allowed in emergency"
 
     _locked: LockedBalance = self.locked[_addr]
 
@@ -612,12 +712,13 @@ def create_lock(_value: uint256, _unlock_time: uint256):
     @param _unlock_time Epoch time when tokens unlock, rounded down to whole weeks
     """
     assert not self.create_lock_disabled, "create lock disabled"
-    assert not self.emergency, "not allowed in emergency"
+    assert not self._emergency(), "not allowed in emergency"
 
     self.assert_not_contract(msg.sender)
     unlock_time: uint256 = (_unlock_time / EPOCH_SECONDS) * EPOCH_SECONDS  # Locktime is rounded down to weeks
     _locked: LockedBalance = self.locked[msg.sender]
 
+    self.user_token_claimed_window_start[msg.sender] = self._currentWindow() - EPOCH_SECONDS   # to not process reward from =0
     self.pool_members += 1
     assert self.pool_members <= self.max_pool_members, "max_pool_members exceed"
 
@@ -640,7 +741,7 @@ def increase_amount(_value: uint256):
     @param _value Amount of tokens to deposit and add to the lock
     """
     assert not self.increase_amount_disabled, "increase amount disabled"
-    assert not self.emergency, "not allowed in emergency"
+    assert not self._emergency(), "not allowed in emergency"
 
     self.assert_not_contract(msg.sender)
     _locked: LockedBalance = self.locked[msg.sender]
@@ -662,14 +763,14 @@ def increase_unlock_time(_unlock_time: uint256):
     @param _unlock_time New epoch time for unlocking
     """
     assert not self.increase_unlock_time_disabled, "increase unlock time disabled"
-    assert not self.emergency, "not allowed in emergency"
+    assert not self._emergency(), "not allowed in emergency"
 
     self.assert_not_contract(msg.sender)
     _locked: LockedBalance = self.locked[msg.sender]
     unlock_time: uint256 = (_unlock_time / EPOCH_SECONDS) * EPOCH_SECONDS  # Locktime is rounded down to weeks
 
-    assert _locked.end > block.timestamp, "Lock expired"
     assert _locked.amount > 0, "Nothing is locked"
+    assert _locked.end > block.timestamp, "Lock expired"
     assert unlock_time > _locked.end, "Can only increase lock duration"
     assert unlock_time <= block.timestamp + MAXTIME, "Voting lock can be 4 years max"
 
@@ -684,23 +785,28 @@ def withdraw():
     @dev Only possible if the lock has expired
     """
     assert not self.withdraw_disabled, "withdraw disabled"
-    assert not self.emergency, "not allowed in emergency"
 
     _locked: LockedBalance = self.locked[msg.sender]
-    assert block.timestamp >= _locked.end, "The lock didn't expire"
     value: uint256 = convert(_locked.amount, uint256)
-
-    old_locked: LockedBalance = _locked
-    _locked.end = 0
-    _locked.amount = 0
-    self.locked[msg.sender] = _locked
     supply_before: uint256 = self.supply
-    self.supply = supply_before - value
 
-    # old_locked can have either expired <= timestamp or zero end
-    # _locked has only 0 end
-    # Both can have >= 0 amount
-    self._checkpoint(msg.sender, old_locked, _locked)
+    if self._emergency():
+        # in emergency we do not check _locked.end neither update checkpoints
+        _locked.end = 0
+        _locked.amount = 0
+        self.locked[msg.sender] = _locked
+        self.supply = supply_before - value
+    else:
+        assert block.timestamp >= _locked.end, "The lock didn't expire"
+        old_locked: LockedBalance = _locked
+        _locked.end = 0
+        _locked.amount = 0
+        self.locked[msg.sender] = _locked
+        self.supply = supply_before - value
+        # old_locked can have either expired <= timestamp or zero end
+        # _locked has only 0 end
+        # Both can have >= 0 amount
+        self._checkpoint(msg.sender, old_locked, _locked)
 
     assert ERC20(self.token).transfer(msg.sender, value)
 
@@ -710,31 +816,30 @@ def withdraw():
     log Supply(supply_before, supply_before - value)
 
 
-# The following ERC20/minime-compatible methods are not real balanceOf and supply!
-# They measure the weights for the purpose of voting, so they don't represent
-# real coins.
-
 @internal
 @view
-def find_block_epoch(_block: uint256, max_epoch: uint256) -> uint256:
+def find_timestamp_epoch(_ts: uint256, max_epoch: uint256) -> (bool, uint256):
     """
-    @notice Binary search to estimate timestamp for block number
-    @param _block Block to find
+    @notice Binary search for epoch timestamp
+    @param _ts timestamp to find
     @param max_epoch Don't go beyond this epoch
-    @return Approximate timestamp for block
+    @return found, approximate epoch for block
     """
     # Binary search
     _min: uint256 = 0
     _max: uint256 = max_epoch
+    if self.point_history[_min].ts > _ts:
+        return False, 0
+    # assert self.point_history[_max].ts >= _ts, "not found"  # commented out because you can search for the last epoch before ts
     for i in range(128):  # Will be always enough for 128-bit numbers
         if _min >= _max:
             break
         _mid: uint256 = (_min + _max + 1) / 2
-        if self.point_history[_mid].blk <= _block:
+        if self.point_history[_mid].ts <= _ts:
             _min = _mid
         else:
             _max = _mid - 1
-    return _min
+    return True, _min
 
 
 @external
@@ -747,66 +852,35 @@ def balanceOf(addr: address, _t: uint256 = block.timestamp) -> uint256:
     @param _t Epoch time to return voting power at
     @return User voting power
     """
-    _epoch: uint256 = self.user_point_epoch[addr]
-    if _epoch == 0:
-        return 0
-    else:
-        last_point: Point = self.user_point_history[addr][_epoch]
-        last_point.bias -= last_point.slope * convert(_t - last_point.ts, int128)
-        if last_point.bias < 0:
-            last_point.bias = 0
-        return convert(last_point.bias, uint256)
-
-
-@external
-@view
-def balanceOfAt(addr: address, _block: uint256) -> uint256:
-    """
-    @notice Measure voting power of `addr` at block height `_block`
-    @dev Adheres to MiniMe `balanceOfAt` interface: https://github.com/Giveth/minime
-    @param addr User's wallet address
-    @param _block Block to calculate the voting power at
-    @return Voting power
-    """
-    # Copying and pasting totalSupply code because Vyper cannot pass by
-    # reference yet
-    assert _block <= block.number
-
-    # Binary search
-    _min: uint256 = 0
-    _max: uint256 = self.user_point_epoch[addr]
-    for i in range(128):  # Will be always enough for 128-bit numbers
-        if _min >= _max:
-            break
-        _mid: uint256 = (_min + _max + 1) / 2
-        if self.user_point_history[addr][_mid].blk <= _block:
-            _min = _mid
+    if _t >= block.timestamp:
+        _epoch: uint256 = self.user_point_epoch[addr]
+        if _epoch == 0:
+            return 0
         else:
-            _max = _mid - 1
-
-    upoint: Point = self.user_point_history[addr][_min]
-
-    max_epoch: uint256 = self.epoch
-    _epoch: uint256 = self.find_block_epoch(_block, max_epoch)
-    point_0: Point = self.point_history[_epoch]
-    d_block: uint256 = 0
-    d_t: uint256 = 0
-    if _epoch < max_epoch:
-        point_1: Point = self.point_history[_epoch + 1]
-        d_block = point_1.blk - point_0.blk
-        d_t = point_1.ts - point_0.ts
+            last_point: Point = self.user_point_history[addr][_epoch]
+            last_point.bias -= last_point.slope * convert(_t - last_point.ts, int128)
+            if last_point.bias < 0:
+                last_point.bias = 0
+            return convert(last_point.bias, uint256)
     else:
-        d_block = block.number - point_0.blk
-        d_t = block.timestamp - point_0.ts
-    block_time: uint256 = point_0.ts
-    if d_block != 0:
-        block_time += d_t * (_block - point_0.blk) / d_block
+        # Binary search
+        _min: uint256 = 0
+        _max: uint256 = self.user_point_epoch[addr]
+        for i in range(128):  # Will be always enough for 128-bit numbers
+            if _min >= _max:
+                break
+            _mid: uint256 = (_min + _max + 1) / 2
+            if self.user_point_history[addr][_mid].ts <= _t:
+                _min = _mid
+            else:
+                _max = _mid - 1
 
-    upoint.bias -= upoint.slope * convert(block_time - upoint.ts, int128)
-    if upoint.bias >= 0:
-        return convert(upoint.bias, uint256)
-    else:
-        return 0
+        upoint: Point = self.user_point_history[addr][_min]
+        upoint.bias -= upoint.slope * convert(_t - upoint.ts, int128)
+        if upoint.bias >= 0:
+            return convert(upoint.bias, uint256)
+        else:
+            return 0
 
 
 @internal
@@ -841,6 +915,12 @@ def supply_at(point: Point, t: uint256) -> uint256:
 @external
 @view
 def totalSupply(t: uint256 = block.timestamp) -> uint256:
+    return self._totalSupply(t)
+
+
+@internal
+@view
+def _totalSupply(t: uint256 = block.timestamp) -> uint256:
     """
     @notice Calculate total voting power
     @dev Adheres to the ERC20 `totalSupply` interface for Aragon compatibility
@@ -853,45 +933,42 @@ def totalSupply(t: uint256 = block.timestamp) -> uint256:
 
 @external
 @view
-def totalSupplyAt(_block: uint256) -> uint256:
+def totalSupplyAtTimestamp(_ts: uint256) -> (uint256, uint256):
     """
     @notice Calculate total voting power at some point in the past
-    @param _block Block to calculate the total voting power at
-    @return Total voting power at `_block`
+    @param _ts Timestamp to calculate the total voting power at
+    @return target_epoch, Total voting power at `_ts`
     """
-    assert _block <= block.number
+    return self._totalSupplyAtTimestamp(_ts)
+
+
+@internal
+@view
+def _totalSupplyAtTimestamp(_ts: uint256) -> (uint256, uint256):
+    """
+    @notice Calculate total voting power at some point in the past
+    @param _ts Timestamp to calculate the total voting power at
+    @return target_epoch, Total voting power at `_ts`
+    """
     _epoch: uint256 = self.epoch
-    target_epoch: uint256 = self.find_block_epoch(_block, _epoch)
-
+    target_epoch_found: bool = False
+    target_epoch: uint256 = 0
+    (target_epoch_found, target_epoch) = self.find_timestamp_epoch(_ts, _epoch)
+    if not target_epoch_found:
+        return 0, 0
     point: Point = self.point_history[target_epoch]
-    dt: uint256 = 0
-    if target_epoch < _epoch:
-        point_next: Point = self.point_history[target_epoch + 1]
-        if point.blk != point_next.blk:
-            dt = (_block - point.blk) * (point_next.ts - point.ts) / (point_next.blk - point.blk)
-    else:
-        if point.blk != block.number:
-            dt = (_block - point.blk) * (block.timestamp - point.ts) / (block.number - point.blk)
-    # Now dt contains info on how far are we beyond point
-
-    return self.supply_at(point, point.ts + dt)
-
-
-# Dummy methods for compatibility with Aragon
-
-@external
-def changeController(_newController: address):
-    """
-    @dev Dummy method required for Aragon compatibility
-    """
-    assert msg.sender == self.controller
-    self.controller = _newController
+    return target_epoch, self.supply_at(point, _ts)
 
 
 # Rewards
+# original contract - https://etherscan.io/address/0x5f3b5DfEb7B28CDbD7FAba78963EE202a494e2A2
 
-user_token_claimed_epoch: public(HashMap[address, HashMap[address, uint256]])  # user -> token -> lastClaimedEpoch
-epoch_token_rewards: public(HashMap[uint256, HashMap[address, uint256]])  # epoch -> token -> totalRewardsAmount
+# inspired by balanceOfAt
+@external
+@view
+def searchForUserEpochByTimestamp(addr: address, ts: uint256) -> uint256:
+    return self._searchForUserEpochByTimestamp(addr, ts)
+
 
 # inspired by balanceOfAt
 @internal
@@ -904,7 +981,7 @@ def _searchForUserEpochByTimestamp(addr: address, ts: uint256) -> uint256:
     if self.user_point_history[addr][_min].ts > ts:
         return MAX_UINT256
     if self.user_point_history[addr][_max].ts < ts:
-        return _max   #xx ???
+        return _max   # note!
 
     for i in range(128):  # Will be always enough for 128-bit numbers
         if _min >= _max:
@@ -916,11 +993,24 @@ def _searchForUserEpochByTimestamp(addr: address, ts: uint256) -> uint256:
             _max = _mid - 1
     return _min
 
-event _averageUserBlanaceOverEpochDebug:
+
+event _averageUserBalanaceOverWindowDebug:
     user_epoch_start: uint256
     user_epoch_end: uint256
+    avg_balance: uint256
 
-event _averageUserBlanaceOverEpochDebugS:
+
+event _averageUserBalanceOverWindowDebugSZeroInterval:
+    user_epoch: uint256
+    bias: int128
+    slope: int128
+    _ts0: uint256
+    _ts1: uint256
+    _ts: uint256
+    trapezoidArea: uint256
+
+
+event _averageUserBalanceOverWindowDebugS:
     user_epoch: uint256
     bias: int128
     slope: int128
@@ -931,11 +1021,45 @@ event _averageUserBlanaceOverEpochDebugS:
 
 
 @internal
+@pure
+def anyTrapezoidArea(
+    _bias_ts: uint256,
+    _bias: int128,
+    _slope: int128,
+    _ts0: uint256,
+    _ts1: uint256
+) -> uint256:
+    assert _ts1 >= _ts0, "wrong ts"
+    start_bias: int128 = _bias - _slope * convert(_ts0 - _bias_ts, int128)
+    end_bias: int128 = _bias - _slope * convert(_ts1 - _bias_ts, int128)
+    if start_bias < 0:
+        return 0
+    elif end_bias < 0:
+        end_ts: uint256 = _ts0 + convert(_bias / _slope, uint256)
+        _ts: uint256 = end_ts - _ts0
+        return convert(start_bias, uint256) * _ts / 2  # triangle
+    else:
+        _ts: uint256 = _ts1 - _ts0
+        return _ts * convert(start_bias + end_bias, uint256) / 2  # trapezoid
+
+
+@external
+def averageUserBalanaceOverWindowTx(addr: address, _window: uint256) -> uint256:
+    return self._averageUserBalanaceOverWindow(addr, _window)
+
+
+@external
 @view
-def _averageUserBlanaceOverEpoch(addr: address, _epoch: uint256) -> uint256:
-    assert _epoch < self.epoch, "unfnalized epoch"  # typo
-    ts_start: uint256 = self.point_history[_epoch].ts
-    ts_end: uint256 = self.point_history[_epoch+1].ts
+def averageUserBalanaceOverWindow(addr: address, _window: uint256) -> uint256:
+    return self._averageUserBalanaceOverWindow(addr, _window)
+
+
+@internal
+@view
+def _averageUserBalanaceOverWindow(addr: address, _window: uint256) -> uint256:
+    assert _window < self._currentWindow(), "unfinalized window"
+    ts_start: uint256 = _window
+    ts_end: uint256 = _window + EPOCH_SECONDS
 
     user_epoch_start: uint256 = self._searchForUserEpochByTimestamp(addr, ts_start)
     if user_epoch_start == MAX_UINT256:
@@ -944,73 +1068,59 @@ def _averageUserBlanaceOverEpoch(addr: address, _epoch: uint256) -> uint256:
     if user_epoch_end == MAX_UINT256:
         raise "failed user_epoch_end searchForUserEpochByTimestamp"
 
-    # todo: check it
     areaUnderPolyline: uint256 = 0
     user_epoch: uint256 = user_epoch_start
-    for d_user_epoch in range(256):  # todo be careful here DoS attack!, we may use additional aggregation
+    for d_user_epoch in range(1024):  # be careful with range
         if user_epoch > user_epoch_end:  # note: we use > because we want to process the end epoch as well
             break
         bias: int128 = self.user_point_history[addr][user_epoch].bias
         slope: int128 = self.user_point_history[addr][user_epoch].slope
         _ts_begin: uint256 = self.user_point_history[addr][user_epoch].ts
         _ts0: uint256 = _ts_begin
-        _ts1: uint256 = self.user_point_history[addr][user_epoch+1].ts
 
-        if _ts1 == 0:
+        _ts1: uint256 = self.user_point_history[addr][user_epoch+1].ts
+        if _ts1 == 0:  # the last user epoch
             _ts1 = ts_end
 
-        #xx ??
         if _ts1 > ts_end:
             _ts1 = ts_end
         if _ts0 < ts_start:
             _ts0 = ts_start
 
-        _ts: uint256 = _ts1 - _ts0
-        start_bias: int128 = bias - slope * convert(_ts0 - _ts_begin, int128)
-        end_bias: int128 = bias - slope * convert(_ts1 - _ts_begin, int128)
-
-        trapezoidArea: uint256 = 0
-        if start_bias < 0:
-            trapezoidArea = 0
-        elif end_bias < 0:
-            end_ts: uint256 = _ts0 + convert(bias / slope, uint256)
-            trapezoidArea = convert(start_bias, uint256) * (end_ts - _ts0) / 2  # triangle
-        else:
-            trapezoidArea = _ts * convert(start_bias + end_bias, uint256) / 2
-
+        trapezoidArea: uint256 = self.anyTrapezoidArea(_ts_begin, bias, slope, _ts0, _ts1)
         areaUnderPolyline += trapezoidArea
 
-        if ts_end == ts_start:  #xx todo discuss
+        if ts_end == ts_start:  # this is a specific case when interval=0
             assert user_epoch_start == user_epoch_end
-            log _averageUserBlanaceOverEpochDebugS(
+            assert _ts0 == _ts1
+            log _averageUserBalanceOverWindowDebugSZeroInterval(
                 user_epoch,
                 bias,
                 slope,
                 _ts0,
                 _ts1,
-                _ts,
+                _ts1-_ts0,
                 0
             )
-            log _averageUserBlanaceOverEpochDebug(user_epoch_start, user_epoch_end)
-            return convert(start_bias, uint256)
+            log _averageUserBalanaceOverWindowDebug(user_epoch_start, user_epoch_end, convert(bias, uint256))
+            return convert(bias, uint256)
 
 
-        log _averageUserBlanaceOverEpochDebugS(
+        log _averageUserBalanceOverWindowDebugS(
             user_epoch,
             bias,
             slope,
             _ts0,
             _ts1,
-            _ts,
+            _ts1 - _ts0,
             trapezoidArea
         )
 
         # next iteration
         user_epoch += 1
 
-    log _averageUserBlanaceOverEpochDebug(user_epoch_start, user_epoch_end)
-
     avgBalance: uint256 = areaUnderPolyline / (ts_end - ts_start)
+    log _averageUserBalanaceOverWindowDebug(user_epoch_start, user_epoch_end, avgBalance)
     return avgBalance
 
 
@@ -1024,38 +1134,99 @@ event _averageTotalSupplyOverEpoch:
     result: uint256
 
 
+@external
+def averageTotalSupplyOverWindowTx(_window: uint256) -> uint256:
+    return self._averageTotalSupplyOverWindow(_window)
+
+
+@external
+@view
+def averageTotalSupplyOverWindow(_window: uint256) -> uint256:
+    return self._averageTotalSupplyOverWindow(_window)
+
+
+event _averageTotalSupplyOverWindow_NewWindow:
+    _window: uint256
+    target_epoch_start: uint256
+    total_supply_start: uint256
+    target_epoch_end: uint256
+    total_supply_end: uint256
+    trapezoidArea: uint256
+
+
+event _averageTotalSupplyOverWindow_PartlyAggregatedWindow:
+    _window: uint256  # _window
+    aggregated: uint256  # aggregated
+    bias_ts: uint256  # bias ts
+    bias: int128  # bias
+    slope: int128  # slope
+    ts_start: uint256  # ts start
+    ts_end: uint256  # ts end
+
+
+event _averageTotalSupplyOverWindow_FullyAggregatedWindow:
+    _window: uint256  # _window
+    aggregated: uint256  # aggregated
+
+
 @internal
 @view
-def _averageTotalSupplyOverEpoch(_epoch: uint256) -> uint256:
-    assert _epoch < self.epoch, "incorrect epoch"
-    _ts0: uint256 = self.point_history[_epoch].ts
-    _ts1: uint256 = self.point_history[_epoch+1].ts
-    bias: int128 = self.point_history[_epoch].bias
-    slope: int128 = self.point_history[_epoch].slope
-
-    if _ts0 == _ts1:
-        return convert(bias, uint256)
-
-    _ts: uint256 = _ts1 - _ts0
-    end_bias: int128 = bias - slope * convert(_ts, int128)
+def _averageTotalSupplyOverWindow(_window: uint256) -> uint256:
+    assert _window < self._currentWindow(), "incorrect window"
     trapezoidArea: uint256 = 0
-    if end_bias < 0:
-        end_ts: uint256 = _ts0 + convert(bias / slope, uint256)
-        trapezoidArea = convert(bias, uint256) * (end_ts - _ts0) / 2  # triangle
-    else:
-        trapezoidArea = _ts * convert(bias + end_bias, uint256) / 2
+    _epoch: uint256 = self.epoch
+    if self.point_history[_epoch].ts < _window:
+        # you know the last point, and only need to integrate the curve
+        # do not forget about slope changes! (it's handled inside _totalSupplyAtTimestamp)
+        target_epoch_start: uint256 = 0
+        total_supply_start: uint256 = 0
+        target_epoch_end: uint256 = 0
+        total_supply_end: uint256 = 0
+        target_epoch_start, total_supply_start = self._totalSupplyAtTimestamp(_window)
+        # note: total_supply turns 0 only in window starts
+        target_epoch_end, total_supply_end = self._totalSupplyAtTimestamp(_window + EPOCH_SECONDS)
+        assert _epoch == target_epoch_start, "impossible: not last epoch"
+        assert _epoch == target_epoch_end, "impossible: not last epoch"
+        trapezoidArea = (total_supply_start + total_supply_end) * EPOCH_SECONDS / 2
+        log _averageTotalSupplyOverWindow_NewWindow(
+            _window,
+            target_epoch_start,
+            total_supply_start,
+            target_epoch_end,
+            total_supply_end,
+            trapezoidArea,
+        )
+    elif self.point_history[_epoch].ts <= _window + EPOCH_SECONDS:
+        # the window is partially aggregated in interval [_window; self.point_history[_epoch].ts]
+        # so we calculate trapezoid area in [self.point_history[_epoch].ts; _window + EPOCH_SECONDS]
+        trapezoidArea = self.anyTrapezoidArea(
+            self.point_history[_epoch].ts,
+            self.point_history[_epoch].bias,
+            self.point_history[_epoch].slope,
+            self.point_history[_epoch].ts,
+            _window + EPOCH_SECONDS
+        )
+        aggregated: uint256 = self.integrated_totalSupply_over_window[_window]
+        log _averageTotalSupplyOverWindow_PartlyAggregatedWindow(
+            _window,  # _window
+            aggregated,  # aggregated
+            self.point_history[_epoch].ts,  # bias ts
+            self.point_history[_epoch].bias,  # bias
+            self.point_history[_epoch].slope,  # slope
+            self.point_history[_epoch].ts,  # ts start
+            _window + EPOCH_SECONDS  # ts end
+        )
+        trapezoidArea += aggregated
+    else: # _window + EPOCH_SECONDS <= self.point_history[_epoch].ts
+        # the window is fully aggregated
+        trapezoidArea = self.integrated_totalSupply_over_window[_window]
+        log _averageTotalSupplyOverWindow_FullyAggregatedWindow(
+            _window,  # _window
+            trapezoidArea  # aggregated
+        )
 
-    result: uint256 = trapezoidArea / _ts
-    # log _averageTotalSupplyOverEpoch(
-    #     _epoch,
-    #     _ts0,
-    #     _ts1,
-    #     bias,
-    #     end_bias,
-    #     slope,
-    #     result
-    # )
-    return result
+    return trapezoidArea / EPOCH_SECONDS
+
 
 # from https://ethereum.stackexchange.com/questions/84775/is-there-a-vyper-equivalent-to-openzeppelins-safeerc20-safetransfer
 @internal
@@ -1089,7 +1260,8 @@ def safe_transfer_from(_token: address, _from: address, _to: address, _value: ui
         assert convert(_response, bool), "Transfer failed!"
 
 
-event RewardReceived:
+event WindowRewardReceived:
+    window: indexed(uint256)
     token: indexed(address)
     amount: uint256
     actual_amount: uint256
@@ -1098,41 +1270,23 @@ event RewardReceived:
 @external
 @payable
 def receiveNativeReward():
-    if (not (
-               (self.point_history[self.epoch].ts <= block.timestamp) and
-               (block.timestamp < self.point_history[self.epoch].ts + EPOCH_SECONDS)
-    )):
-        self._checkpoint(ZERO_ADDRESS, empty(LockedBalance), empty(LockedBalance))
-    self.epoch_token_rewards[self.epoch][ZERO_ADDRESS] += msg.value
-    log RewardReceived(ZERO_ADDRESS, msg.value, msg.value)
+    self.window_token_rewards[self._currentWindow()][ZERO_ADDRESS] += msg.value
+    log WindowRewardReceived(self._currentWindow(), ZERO_ADDRESS, msg.value, msg.value)
 
 
 @external
 def receiveReward(_token: address, amount: uint256):
-    if (not (
-               (self.point_history[self.epoch].ts <= block.timestamp) and
-               (block.timestamp < self.point_history[self.epoch].ts + EPOCH_SECONDS)
-    )):
-        self._checkpoint(ZERO_ADDRESS, empty(LockedBalance), empty(LockedBalance))
     balance_before: uint256 = ERC20(_token).balanceOf(self)
     self.safe_transfer_from(_token, msg.sender, self, amount)
-    actual_amount: uint256 = ERC20(_token).balanceOf(self) - balance_before
-    self.epoch_token_rewards[self.epoch][_token] += actual_amount
-    log RewardReceived(_token, amount, actual_amount)
+    actual_amount: uint256 = ERC20(_token).balanceOf(self) - balance_before  # handle fee token
+    self.window_token_rewards[self._currentWindow()][_token] += actual_amount
+    log WindowRewardReceived(self._currentWindow(), _token, amount, actual_amount)
 
 
 event UserRewardsClaimed:
-    user_claimed_epoch: indexed(uint256)
+    last_processed_window: indexed(uint256)
     token: indexed(address)
     amount: uint256
-
-
-event UserRewardsClaimedDebug:
-    _epoch: uint256
-    _avgUserBlanace: uint256
-    _avgTotalSupply: uint256
-    _epochReward: uint256
-    _userEpochReward: uint256
 
 
 event Log0Args:
@@ -1140,94 +1294,159 @@ event Log0Args:
 
 
 event Log1Args:
-    message: String[256]
+    message1: String[256]
     value1: uint256
 
 
 event Log2Args:
-    message: String[256]
+    message1: String[256]
     value1: uint256
+    message2: String[256]
+    value2: uint256
+
+
+@internal
+@view
+def _currentWindow() -> uint256:
+    return block.timestamp / EPOCH_SECONDS * EPOCH_SECONDS
+
+
+@external
+@view
+def currentWindow() -> uint256:
+    return self._currentWindow()
+
+
+event _user_token_claimable_rewards_log:
+    _window: uint256
+    _avgUserBalanace: uint256
+    _avgTotalSupply: uint256
+    _windowReward: uint256
+    _thisWindowUserReward: uint256
+
+
+event UserClaimWindowStart:
+    value: uint256
+
+
+event UserClaimWindowEnd:
+    value: uint256
+
+
+@internal
+@view
+def _user_token_claimable_rewards(user: address, _token: address) -> (uint256, uint256):
+    rewardsAmount: uint256 = 0
+
+    __currentWindow: uint256 = self._currentWindow()
+    log Log1Args("__currentWindow", __currentWindow)
+
+    _window: uint256 = self.user_token_claimed_window[user][_token]
+    if _window == 0:
+        _window = self.user_token_claimed_window_start[user]
+        assert _window != 0, "no deposit or broken state"
+    log UserClaimWindowStart(_window)
+    log Log1Args("initial _window", _window)
+
+    for d_window in range(365):  # max 1 year per transaction to not get out-of-gas
+        _window += EPOCH_SECONDS  # move to process the next unprocessed widnow
+        if _window >= __currentWindow:  # note: we use >= because currentWindow is not finalized
+            _window -= EPOCH_SECONDS  # we want to keep last processed value
+            break
+        _avgUserBalanace: uint256 = self._averageUserBalanaceOverWindow(user, _window)
+        if _avgUserBalanace == 0:
+            log Log1Args("_user_token_claimable_rewards skip _window = {0} because _avgUserBalanace=0", _window)
+            continue
+        _avgTotalSupply: uint256 = self._averageTotalSupplyOverWindow(_window)
+        if _avgTotalSupply == 0:
+            log Log1Args("_user_token_claimable_rewards skip _window = {0} because _avgTotalSupply=0", _window)
+            continue
+        _windowReward: uint256 = self.window_token_rewards[_window][_token]
+        if _windowReward == 0:
+            log Log1Args("_user_token_claimable_rewards skip _window = {0} because _windowReward=0", _window)
+            continue
+        _thisWindowUserReward: uint256 = _windowReward * _avgUserBalanace / _avgTotalSupply
+        log _user_token_claimable_rewards_log(
+            _window,
+            _avgUserBalanace,
+            _avgTotalSupply,
+            _windowReward,
+            _thisWindowUserReward
+        )
+        rewardsAmount += _thisWindowUserReward
+    return rewardsAmount, _window
+
+
+@external
+def user_token_claimable_rewardsTx(user: address, _token: address) -> uint256:
+    rewardsAmount: uint256 = 0
+    lastProcessedWindow: uint256 = 0
+    (rewardsAmount, lastProcessedWindow) = self._user_token_claimable_rewards(user, _token)
+    return rewardsAmount
 
 
 @external
 @view
 def user_token_claimable_rewards(user: address, _token: address) -> uint256:
     rewardsAmount: uint256 = 0
-    _user_claimed_epoch: uint256 = self.user_token_claimed_epoch[user][_token]
-    currentEpoch: uint256 = self.epoch  # load to memory once
-    _epoch: uint256 = _user_claimed_epoch
-    for d_epoch in range(255):  #xx 255?
-        _epoch += 1  # move to process the next unprocessed epoch
-        if _epoch >= currentEpoch:  # note: we use >= because currentEpoch is not finalized
-            break
-        _epochReward: uint256 = self.epoch_token_rewards[_epoch][_token]
-        if _epochReward == 0:
-            log Log1Args("skip _epoch {0} because _epochReward=0", _epoch)
-            continue
-        _avgUserBlanace: uint256 = self._averageUserBlanaceOverEpoch(user, _epoch)
-        if _avgUserBlanace == 0:
-            log Log1Args("skip _epoch {0} because _avgUserBlanace=0", _epoch)
-            continue
-        _avgTotalSupply: uint256 = self._averageTotalSupplyOverEpoch(_epoch)
-        if _avgTotalSupply == 0:
-            log Log1Args("skip _epoch {0} because _avgTotalSupply=0", _epoch)
-            continue
-        rewardsAmount += _epochReward * _avgUserBlanace / _avgTotalSupply
-        log UserRewardsClaimedDebug(_epoch, _avgUserBlanace, _avgTotalSupply, _epochReward, _epochReward * _avgUserBlanace / _avgTotalSupply)
-    log UserRewardsClaimed(_epoch - 1, _token, rewardsAmount)
+    lastProcessedWindow: uint256 = 0
+    (rewardsAmount, lastProcessedWindow) = self._user_token_claimable_rewards(user, _token)
     return rewardsAmount
 
 
-#xx todo what if rewards but no locker?
+# if there was no stake, but reward was transferred to the contract
+# no one can claim it in a usual way, so it will be forever stuck
+# for such situation we have this special method to transfer
+# stuck reward to the owner
+@external
+def claim_stuck_rewards(_token: address, _window: uint256):
+    assert msg.sender == self._admin()
+    assert _window < self._currentWindow(), "unfinalized window"
+    assert not self.stuckWindowRewardClaimed[_window], "already claimed"
+    self.stuckWindowRewardClaimed[_window] = True
+
+    _windowReward: uint256 = self.window_token_rewards[_window][_token]
+    if _windowReward == 0:
+        log Log1Args("skip _window {0} because _windowReward=0", _window)
+        return
+
+    _avgTotalSupply: uint256 = self._averageTotalSupplyOverWindow(_window)
+    assert _avgTotalSupply == 0, "reward not stuck"
+
+    log StuckWindowRewardClaimed(_window, _token, _windowReward)
+    self.any_transfer(_token, msg.sender, _windowReward)
+
+
 @external
 def claim_rewards(_token: address):
     rewardsAmount: uint256 = 0
-    _user_claimed_epoch: uint256 = self.user_token_claimed_epoch[msg.sender][_token]
-    currentEpoch: uint256 = self.epoch  # load to memory once
-    _epoch: uint256 = _user_claimed_epoch
-    for d_epoch in range(255):  #xx 255?
-        _epoch += 1  # move to process the next unprocessed epoch
-        if _epoch >= currentEpoch:  # note: we use >= because curerntEpoch is not finalized
-            break
-        _epochReward: uint256 = self.epoch_token_rewards[_epoch][_token]
-        if _epochReward == 0:
-            log Log1Args("skip _epoch {0} because _epochReward=0", _epoch)
-            continue
-        _avgUserBlanace: uint256 = self._averageUserBlanaceOverEpoch(msg.sender, _epoch)
-        if _avgUserBlanace == 0:
-            log Log1Args("skip _epoch {0} because _avgUserBlanace=0", _epoch)
-            continue
-        _avgTotalSupply: uint256 = self._averageTotalSupplyOverEpoch(_epoch)
-        if _avgTotalSupply == 0:
-            log Log1Args("skip _epoch {0} because _avgTotalSupply=0", _epoch)
-            continue
-        rewardsAmount += _epochReward * _avgUserBlanace / _avgTotalSupply
-        log UserRewardsClaimedDebug(_epoch, _avgUserBlanace, _avgTotalSupply, _epochReward, _epochReward * _avgUserBlanace / _avgTotalSupply)
-    self.user_token_claimed_epoch[msg.sender][_token] = _epoch - 1
+    lastProcessedWindow: uint256 = 0
+    (rewardsAmount, lastProcessedWindow) = self._user_token_claimable_rewards(msg.sender, _token)
+    self.user_token_claimed_window[msg.sender][_token] = lastProcessedWindow
+    log UserClaimWindowEnd(lastProcessedWindow)
 
+    self.any_transfer(_token, msg.sender, rewardsAmount)
+    log UserRewardsClaimed(lastProcessedWindow, _token, rewardsAmount)
+
+
+@internal
+def any_transfer(_token: address, _to: address, _value: uint256):
     if _token == ZERO_ADDRESS:
-        send(msg.sender, rewardsAmount)
+        send(_to, _value)
+        log TransferNative(_to, _value)
     else:
-        self.safe_transfer(_token, msg.sender, rewardsAmount)
+        self.safe_transfer(_token, _to, _value)
 
-    log UserRewardsClaimed(_epoch - 1, _token, rewardsAmount)
 
 @external
 def emergency_withdraw(_token: address, _amount: uint256, to: address):
-    assert msg.sender == self._admin()
-    if _token == ZERO_ADDRESS:
-        send(to, _amount)
-    else:
-        self.safe_transfer(_token, to, _amount)
-
-@external
-def emergency_withdraw_many(_tokens: address[30], _amounts: uint256[30], tos: address[30]):
-    assert msg.sender == self._admin()
-    for i in range(30):
-        _token: address = _tokens[i]
-        _amount: uint256 = _amounts[i]
-        to: address = tos[i]
-        if _token == ZERO_ADDRESS:
-            send(to, _amount)
-        else:
-            self.safe_transfer(_token, to, _amount)
+    raw_call(
+        self.settings,
+        _abi_encode(
+            _token,
+            _amount,
+            to,
+            method_id=method_id("emergency_withdraw(address,uint256,address)")
+        ),
+        is_delegate_call=True
+    )

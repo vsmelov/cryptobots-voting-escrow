@@ -25,13 +25,13 @@ def test_share_rewards_2users(web3, chain, accounts, token, voting_escrow):
     print_state("after first lock", voting_escrow, user1, user2)
 
     assert voting_escrow.epoch() == 1
-    assert voting_escrow.epoch_token_rewards(1, token) == 0
+    assert voting_escrow.window_token_rewards(1, token) == 0
 
     token.approve(voting_escrow, fee)
     voting_escrow.receiveReward(token, fee, {"from": payer})
 
     assert voting_escrow.epoch() == 1
-    assert voting_escrow.epoch_token_rewards(1, token) == fee
+    assert voting_escrow.window_token_rewards(1, token) == fee
 
     chain.sleep(sleep)
     voting_escrow.checkpoint()
@@ -54,11 +54,11 @@ def test_share_rewards_2users(web3, chain, accounts, token, voting_escrow):
 
     print_state("after 2nd empty checkout", voting_escrow, user1, user2)
 
-    assert voting_escrow.epoch_token_rewards(2, token) == 0
+    assert voting_escrow.window_token_rewards(2, token) == 0
     token.approve(voting_escrow, fee)
     voting_escrow.receiveReward(token, fee, {"from": payer})
     assert voting_escrow.epoch() == 4
-    assert voting_escrow.epoch_token_rewards(1, token) == fee
+    assert voting_escrow.window_token_rewards(1, token) == fee
 
 
     chain.sleep(3600)

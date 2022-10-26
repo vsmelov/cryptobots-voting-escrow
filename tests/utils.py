@@ -3,8 +3,8 @@ def pretty_events(chain, txid):
     print(f'{txid} events:')
     for event_name in tx.events.keys():
         events = tx.events[event_name]
-        if not isinstance(events, list):
-            events = [events]
+        # if not isinstance(events, list):
+        #     events = [events]
         print(f'  {event_name}  len: {len(events)}')
         for ev in events:
             ev = {k: v for k, v in ev.items()}
