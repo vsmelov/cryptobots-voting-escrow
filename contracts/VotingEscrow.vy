@@ -9,6 +9,11 @@
      more than `MAXTIME` (4 years).
 """
 
+# for delegate calls
+storageUInt256: HashMap[bytes32, uint256]
+storageAddress: HashMap[bytes32, address]
+storageBool: HashMap[bytes32, bool]
+
 # Voting escrow to have time-weighted votes
 # Votes have a weight depending on time, so that users are committed
 # to the future of (whatever they are voting for).
@@ -53,10 +58,6 @@ interface ERC20:
 interface SmartWalletChecker:
     def check(addr: address) -> bool: nonpayable
 
-storageUInt256: HashMap[bytes32, uint256]
-storageAddress: HashMap[bytes32, address]
-storageBool: HashMap[bytes32, bool]
-
 
 DEPOSIT_FOR_TYPE: constant(int128) = 0
 CREATE_LOCK_TYPE: constant(int128) = 1
@@ -94,7 +95,8 @@ event Supply:
     supply: uint256
 
 
-EPOCH_SECONDS: constant(uint256) = 24 * 3600  # all future times are rounded by week
+# EPOCH_SECONDS: constant(uint256) = 24 * 3600
+EPOCH_SECONDS: constant(uint256) = 7 * 24 * 3600
 # EPOCH_SECONDS: constant(uint256) = 600
 MAXTIME: constant(uint256) = 4 * 365 * 86400  # 4 years
 MULTIPLIER: constant(uint256) = 10 ** 18
@@ -1419,6 +1421,7 @@ def claim_stuck_rewards(_token: address, _window: uint256):
 
 @external
 def claim_rewards(_token: address):
+    assert not self._emergency(), "emergency!"
     rewardsAmount: uint256 = 0
     lastProcessedWindow: uint256 = 0
     (rewardsAmount, lastProcessedWindow) = self._user_token_claimable_rewards(msg.sender, _token)

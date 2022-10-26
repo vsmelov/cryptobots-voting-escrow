@@ -1,15 +1,17 @@
 import pytest
 from brownie import (
-    BTCBurner,
-    CBurner,
-    ETHBurner,
-    LPBurner,
-    MetaBurner,
-    UnderlyingBurner,
-    USDNBurner,
-    YBurner,
+    # BTCBurner,
+    # CBurner,
+    # ETHBurner,
+    # LPBurner,
+    # MetaBurner,
+    # UnderlyingBurner,
+    # USDNBurner,
+    # YBurner,
     compile_source,
     convert,
+    ERC20CRV,
+    VotingEscrow,
     VotingEscrowSettings,
 )
 from brownie_tokens import ERC20
@@ -267,30 +269,6 @@ def vesting_simple(VestingEscrowSimple, accounts, vesting_factory, coin_a, start
         {"from": accounts[0]},
     )
     yield VestingEscrowSimple.at(tx.new_contracts[0])
-
-
-# parametrized burner fixture
-
-
-@pytest.fixture(
-    scope="module",
-    params=[
-        BTCBurner,
-        CBurner,
-        ETHBurner,
-        LPBurner,
-        MetaBurner,
-        UnderlyingBurner,
-        USDNBurner,
-        YBurner,
-    ],
-)
-def burner(alice, bob, receiver, pool_proxy, request):
-    Burner = request.param
-    args = (pool_proxy, receiver, receiver, alice, bob, {"from": alice})
-    idx = len(Burner.deploy.abi["inputs"]) + 1
-
-    yield Burner.deploy(*args[-idx:])
 
 
 # testing contracts

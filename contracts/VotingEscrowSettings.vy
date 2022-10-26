@@ -1,5 +1,7 @@
 # @version 0.3.7
 
+_nonreentrant: bool  # under the hood we reserve the first storage slot
+
 storageUInt256: HashMap[bytes32, uint256]
 storageAddress: HashMap[bytes32, address]
 storageBool: HashMap[bytes32, bool]
@@ -63,7 +65,7 @@ def transfer_ownership(addr: address):
 
 @external
 def emergency_withdraw(_token: address, _amount: uint256, to: address):
-    assert msg.sender == self._admin()
+    assert msg.sender == self._admin(), "not admin"
     assert self._emergency(), "not emergency"
     if _token == ZERO_ADDRESS:
         send(to, _amount)
@@ -89,7 +91,7 @@ def safe_transfer(_token: address, _to: address, _value: uint256):
 
 @external
 def enable_emergency():
-    assert msg.sender == self._admin()
+    assert msg.sender == self._admin(), "not admin"
     assert not self.storageBool[EMERGENCY_HASH]
     self.storageBool[EMERGENCY_HASH] = True
     log Emergency()

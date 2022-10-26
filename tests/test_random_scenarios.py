@@ -65,7 +65,7 @@ def generate_rewards(n_actions: int, min_rewards_ampunt: int, max_rewards_amount
     return result
 
 
-EPOCH_SECONDS = 24 * 3600
+EPOCH_SECONDS = 7 * 24 * 3600
 
 
 def generate_user_actions(
@@ -140,7 +140,8 @@ def generate_user_actions(
         elif choice == UserClaimRewards:
             result.append(UserClaimRewards(
                 user=user,
-                ts=result[i-1].ts+random.randint(0, max_delay) + 365 * 24 * 3600,  # todo remove
+                # ts=result[i-1].ts+random.randint(0, max_delay) + 365 * 24 * 3600,  # todo remove
+                ts=result[i-1].ts+random.randint(0, max_delay),
             ))
         elif choice == UserWithdraw:
             result.append(UserWithdraw(
@@ -195,6 +196,7 @@ def generate_scenario(
             EPOCH_SECONDS=EPOCH_SECONDS,
         )
         users_actions[user] = user_actions
+        import random
     return Scenario(rewards=rewards, users_actions=users_actions)
 
 
@@ -219,7 +221,7 @@ def generate_scenario(
 
 def share_estim(voting_escrow, window, user):
     assert window // EPOCH_SECONDS * EPOCH_SECONDS == window
-    n = 100  # todo 200
+    n = 3600  # todo 200
     d = EPOCH_SECONDS // n
     assert d * n == EPOCH_SECONDS
     balances = [
@@ -453,7 +455,7 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                 assert estim > 0
                 assert int(actual) == approx(int(estim), rel=approx_rel)
 
-            assert 0
+            # assert 0
         else:
             raise ValueError(action)
 
@@ -467,7 +469,9 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
         print(f'SET {last_ts=}')
         # last_ts = chain.time()
 
-    assert 0
+        import random
+        if random.random() > 0.5:
+            voting_escrow.checkpoint()
 
 
 def test_share_rewards_2users_same_window_reward(web3, chain, accounts, token, voting_escrow):
@@ -592,3 +596,65 @@ def test_share_rewards_2users_same_window_reward(web3, chain, accounts, token, v
     assert tx_lock_user2.timestamp // EPOCH_SECONDS * EPOCH_SECONDS == claim_tx2.events['UserRewardsClaimed']['last_processed_window']
 
     assert abs(claimable2 + claimable1 - reward_amount) <= reward_amount * 1e-6
+
+
+def test_emergency(web3, chain, accounts, token, voting_escrow, owner):
+    EPOCH_SECONDS = voting_escrow.EPOCH_SECONDS()
+    sleep = EPOCH_SECONDS
+    MAXTIME = voting_escrow.MAXTIME()
+    payer = accounts[0]
+    reward_amount = 10**18
+    deposit = 10**18
+    user1 = accounts[1]
+    user2 = accounts[2]
+
+    assert voting_escrow.epoch() == 0
+    assert voting_escrow.window_token_rewards(0, token) == 0
+
+    user1_deposit_amount = deposit
+    user1_deposit_till = chain.time() + EPOCH_SECONDS*10
+    token.transfer(user1, user1_deposit_amount)
+    token.approve(voting_escrow, user1_deposit_amount, {"from": user1})
+    tx_lock_user1 = voting_escrow.create_lock(user1_deposit_amount, user1_deposit_till, {"from": user1})
+    user1_deposit_at = tx_lock_user1.timestamp
+    epoch_after_user1_lock = voting_escrow.epoch()
+
+    # number perfect check
+    assert voting_escrow.locked(user1)[0] == user1_deposit_amount
+    assert voting_escrow.locked(user1)[1] == user1_deposit_till // EPOCH_SECONDS * EPOCH_SECONDS
+    period_user1 = user1_deposit_till // EPOCH_SECONDS * EPOCH_SECONDS - tx_lock_user1.timestamp
+    assert voting_escrow.user_point_history(user1, 0) == (0, 0, 0, 0)
+    assert voting_escrow.user_point_history(user1, 1)[0] == (user1_deposit_amount // MAXTIME) * period_user1  # bias
+    assert voting_escrow.user_point_history(user1, 1)[1] == (user1_deposit_amount // MAXTIME)  # slope
+    assert voting_escrow.user_point_history(user1, 1)[2] == tx_lock_user1.timestamp  # ts
+    assert voting_escrow.user_point_history(user1, 1)[3] == tx_lock_user1.block_number  # blk
+    assert voting_escrow.user_point_history(user1, 2) == (0, 0, 0, 0)
+    assert voting_escrow.point_history(epoch_after_user1_lock)[0] == (user1_deposit_amount // MAXTIME) * period_user1
+    assert voting_escrow.point_history(epoch_after_user1_lock)[1] == (user1_deposit_amount // MAXTIME)
+    assert voting_escrow.point_history(epoch_after_user1_lock)[2] == tx_lock_user1.timestamp
+    assert voting_escrow.point_history(epoch_after_user1_lock)[3] == tx_lock_user1.block_number
+    assert voting_escrow.slope_changes(user1_deposit_till // EPOCH_SECONDS * EPOCH_SECONDS) == -(user1_deposit_amount // MAXTIME)
+
+    user2_deposit_amount = deposit * 2
+    user2_deposit_till = chain.time() + EPOCH_SECONDS*10
+    token.transfer(user2, user2_deposit_amount)
+    token.approve(voting_escrow, user2_deposit_amount, {"from": user2})
+    tx_lock_user2 = voting_escrow.create_lock(user2_deposit_amount, user2_deposit_till, {"from": user2})
+    assert voting_escrow.epoch() == 2
+    user2_deposit_at = tx_lock_user2.timestamp
+    epoch_after_user2_lock = voting_escrow.epoch()
+
+    assert owner == voting_escrow.admin()
+
+    voting_escrow.enable_emergency({"from": owner})
+    user1_balance_before = token.balanceOf(user1)
+    voting_escrow.withdraw({"from": user1})
+    assert token.balanceOf(user1) - user1_balance_before == user1_deposit_amount
+    user2_balance_before = token.balanceOf(user2)
+    voting_escrow.emergency_withdraw(token, user2_deposit_amount, user2, {"from": owner})
+    assert token.balanceOf(user2) - user2_balance_before == user2_deposit_amount
+
+
+def test_set_min_delay_between_manual_checkpoint(web3, chain, accounts, token, voting_escrow, owner):
+    voting_escrow.set_min_delay_between_manual_checkpoint(600, {"from": owner})
+    assert voting_escrow.min_delay_between_manual_checkpoint() == 600
