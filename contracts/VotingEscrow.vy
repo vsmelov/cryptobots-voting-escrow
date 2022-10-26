@@ -396,12 +396,6 @@ event PointHistorySet:
     _point: Point
 
 
-event LogRemove:  # xx todo remove
-    _msg: String[256]
-    x: uint256
-    y: uint256
-
-
 @internal
 def handle_integrated_totalSupply_over_window(
     _msg: String[256],
@@ -413,11 +407,6 @@ def handle_integrated_totalSupply_over_window(
     _prev_point_window: uint256 = prev_point.ts / EPOCH_SECONDS * EPOCH_SECONDS
     _last_point_window: uint256 = last_point.ts / EPOCH_SECONDS * EPOCH_SECONDS
     if _prev_point_window < _last_point_window:
-        # xx todo remove
-        if _last_point_window - _prev_point_window != EPOCH_SECONDS and _epoch != 1:
-            log LogRemove(_msg, _last_point_window, _prev_point_window)
-            return
-
         assert _last_point_window - _prev_point_window == EPOCH_SECONDS or _epoch == 1, \
             "impossible: window_diff>EPOCH_SECONDS"
 
@@ -1289,17 +1278,9 @@ def receiveReward(_token: address, amount: uint256):
 
 
 event UserRewardsClaimed:
-    user_claimed_epoch: indexed(uint256)
+    last_processed_window: indexed(uint256)
     token: indexed(address)
     amount: uint256
-
-
-event UserRewardsClaimedDebug:
-    _epoch: uint256
-    _avgUserBalanace: uint256
-    _avgTotalSupply: uint256
-    _epochReward: uint256
-    _userEpochReward: uint256
 
 
 event Log0Args:
