@@ -65,7 +65,7 @@ def generate_rewards(n_actions: int, min_rewards_ampunt: int, max_rewards_amount
     return result
 
 
-EPOCH_SECONDS = 7 * 24 * 3600
+EPOCH_SECONDS = 24 * 3600
 
 
 def generate_user_actions(
@@ -221,7 +221,7 @@ def generate_scenario(
 
 def share_estim(voting_escrow, window, user):
     assert window // EPOCH_SECONDS * EPOCH_SECONDS == window
-    n = 3600  # todo 200
+    n = 600  # todo 200
     d = EPOCH_SECONDS // n
     assert d * n == EPOCH_SECONDS
     balances = [
@@ -257,7 +257,7 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
 
     approx_rel = 0.03  # todo 0.03
     n_user_actions = 5  # todo set higher
-    n_users = 3
+    n_users = 5
     n_rewards = n_user_actions * n_users
     users = users[:n_users]
 
@@ -293,15 +293,20 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
     pprint.pprint(list(enumerate(actions)))
 
     start_ts = chain.time()
+    print(f'{start_ts=}')
     last_ts = 0
 
+    total_rewards = 0
+
     def process_action(action_index, action):
+        nonlocal total_rewards
         if isinstance(action, Reward):
             voting_escrow.receiveReward(
                 token,
                 action.amount,
                 {"from": owner},
             )
+            total_rewards += action.amount
         elif isinstance(action, UserLock):
             till = start_ts+action.till
             tx = voting_escrow.create_lock(
@@ -365,6 +370,9 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                 token,
                 {"from": action.user},
             )
+            total_rewards -= tx.events['UserRewardsClaimed']['amount']
+            assert total_rewards >= 0, "impossible claimed rewards too much"
+
             pretty_events(chain, tx.txid)
             window_start = tx.events['UserClaimWindowStart']['value']
             window_end = tx.events['UserClaimWindowEnd']['value']

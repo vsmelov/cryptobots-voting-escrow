@@ -108,7 +108,7 @@ def voting_escrow(VotingEscrow, accounts, token):
         "Voting-escrowed CRV",
         "veCRV",
         "veCRV_0.99",
-        3,  # max_pool_members,
+        10,  # max_pool_members,
         1e18,  # min_stake_amount
         {"from": accounts[0]}
     )

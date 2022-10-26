@@ -96,7 +96,7 @@ event Supply:
 
 
 # EPOCH_SECONDS: constant(uint256) = 24 * 3600
-EPOCH_SECONDS: constant(uint256) = 7 * 24 * 3600
+EPOCH_SECONDS: constant(uint256) = 24 * 3600
 # EPOCH_SECONDS: constant(uint256) = 600
 MAXTIME: constant(uint256) = 4 * 365 * 86400  # 4 years
 MULTIPLIER: constant(uint256) = 10 ** 18
