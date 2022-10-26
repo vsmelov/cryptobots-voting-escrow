@@ -140,7 +140,7 @@ def generate_user_actions(
         elif choice == UserClaimRewards:
             result.append(UserClaimRewards(
                 user=user,
-                ts=result[i-1].ts+random.randint(0, max_delay),
+                ts=result[i-1].ts+random.randint(0, max_delay) + 365 * 24 * 3600,  # todo remove
             ))
         elif choice == UserWithdraw:
             result.append(UserWithdraw(
@@ -219,11 +219,11 @@ def generate_scenario(
 
 def share_estim(voting_escrow, window, user):
     assert window // EPOCH_SECONDS * EPOCH_SECONDS == window
-    n = 200
+    n = 100  # todo 200
     d = EPOCH_SECONDS // n
     assert d * n == EPOCH_SECONDS
     balances = [
-        voting_escrow.balanceOfAtTimestamp(user, window + d * i)
+        voting_escrow.balanceOf(user, window + d * i)
         for i in range(n)
     ]
     totalSupplys = [
@@ -253,7 +253,7 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
     min_stake_amount = voting_escrow.min_stake_amount()
     max_stake_amount = 10 * voting_escrow.min_stake_amount()
 
-    approx_rel = 0.03
+    approx_rel = 0.03  # todo 0.03
     n_user_actions = 5  # todo set higher
     n_users = 3
     n_rewards = n_user_actions * n_users
@@ -422,8 +422,9 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                         result.append(record)
                     return result
 
-                print(f'get_history_epochs:')
-                pprint.pprint(get_history_epochs(voting_escrow))
+                if 0:
+                    print(f'get_history_epochs:')
+                    pprint.pprint(get_history_epochs(voting_escrow))
                 print(f'{get_history(w, voting_escrow)=}')
 
                 print(f'{averageUserBalanaceOverWindowTx.events=}')
@@ -458,3 +459,5 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
         last_ts = action.ts
         print(f'SET {last_ts=}')
         # last_ts = chain.time()
+
+    assert 0
