@@ -421,6 +421,9 @@ def handle_integrated_totalSupply_over_window(
         self.integrated_totalSupply_over_window[_prev_point_window] += trapezoidArea
 
         # debugging
+        avg: uint256 = convert(last_point.bias, uint256)
+        if _last_point_window != prev_point.ts:
+            avg = trapezoidArea / (_last_point_window - prev_point.ts)
         record: TotalSupplyHistory = TotalSupplyHistory({
             _msg: "finalize",
             window: _prev_point_window,  # window
@@ -432,7 +435,7 @@ def handle_integrated_totalSupply_over_window(
             _ts1: _last_point_window,  # _ts1
             interval: _last_point_window - prev_point.ts,  # interval
             trapezoidArea: trapezoidArea,  # trapezoidArea
-            avg: trapezoidArea / (_last_point_window - prev_point.ts)
+            avg: avg
         })
         self.integrated_totalSupply_over_window_history[_prev_point_window][
             self.integrated_totalSupply_over_window_history_index[_prev_point_window]
@@ -457,6 +460,9 @@ def handle_integrated_totalSupply_over_window(
         )
 
         # debugging
+        avg: uint256 = convert(last_point.bias, uint256)
+        if last_point.ts != prev_point.ts:
+            avg = trapezoidArea / (last_point.ts - prev_point.ts)
         record: TotalSupplyHistory = TotalSupplyHistory({
             _msg: "extend",
             window: _prev_point_window,
@@ -468,7 +474,7 @@ def handle_integrated_totalSupply_over_window(
             _ts1: last_point.ts,
             interval: last_point.ts - prev_point.ts,
             trapezoidArea: trapezoidArea,
-            avg: trapezoidArea / (last_point.ts - prev_point.ts)
+            avg: avg
         })
         self.integrated_totalSupply_over_window_history[_prev_point_window][
             self.integrated_totalSupply_over_window_history_index[_prev_point_window]
@@ -1342,7 +1348,7 @@ def _user_token_claimable_rewards(user: address, _token: address) -> (uint256, u
     log UserClaimWindowStart(_window)
     log Log1Args("initial _window", _window)
 
-    for d_window in range(365):
+    for d_window in range(365):  # max 1 year per transaction to not get out-of-gas
         _window += EPOCH_SECONDS  # move to process the next unprocessed widnow
         if _window >= __currentWindow:  # note: we use >= because currentWindow is not finalized
             _window -= EPOCH_SECONDS  # we want to keep last processed value
