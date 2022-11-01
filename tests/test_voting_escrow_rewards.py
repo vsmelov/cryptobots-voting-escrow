@@ -87,7 +87,7 @@ def test_share_rewards_1user(web3, chain, accounts, token, voting_escrow):
     assert voting_escrow.currentWindow() == reward_window + EPOCH_SECONDS
 
     # on reward_window claimable == reward_amount
-    claimable_tx = voting_escrow.user_token_claimable_rewardsTx(user1, token)
+    claimable_tx = voting_escrow.user_token_claimable_rewards.transact(user1, token)
     print(f'{claimable_tx.events=}')
     claimable = voting_escrow.user_token_claimable_rewards(user1, token)
     assert claimable == reward_amount
@@ -128,7 +128,7 @@ def test_share_rewards_1user_delay_after_initialization(web3, chain, accounts, t
     assert voting_escrow.currentWindow() == reward_window + EPOCH_SECONDS
 
     # on reward_window claimable == reward_amount
-    claimable_tx = voting_escrow.user_token_claimable_rewardsTx(user1, token)
+    claimable_tx = voting_escrow.user_token_claimable_rewards.transact(user1, token)
     print(f'{claimable_tx.events=}')
     claimable = voting_escrow.user_token_claimable_rewards(user1, token)
     assert claimable == reward_amount
@@ -245,7 +245,7 @@ def test_share_rewards_2users_same_time_deposit(web3, chain, accounts, token, vo
     user2_share = (user2_start_balance + user2_end_balance) / (supply_start + supply_end)
 
     print(f'start claim user1')
-    claimable_tx = voting_escrow.user_token_claimable_rewardsTx(user1, token)
+    claimable_tx = voting_escrow.user_token_claimable_rewards.transact(user1, token)
     print(f'{claimable_tx.events=}')
     claimable = voting_escrow.user_token_claimable_rewards(user1, token)
     claim_tx1 = voting_escrow.claim_rewards(token, {"from": user1})
@@ -371,7 +371,7 @@ def test_share_rewards_2users_3h_deposit(web3, chain, accounts, token, voting_es
     user2_share = (user2_start_balance + user2_end_balance) / (supply_start + supply_end)
 
     print(f'start claim user1')
-    claimable_tx = voting_escrow.user_token_claimable_rewardsTx(user1, token)
+    claimable_tx = voting_escrow.user_token_claimable_rewards.transact(user1, token)
     print(f'claimable_tx.events')
     pretty_events(chain, claimable_tx.txid)
     claimable = voting_escrow.user_token_claimable_rewards(user1, token)

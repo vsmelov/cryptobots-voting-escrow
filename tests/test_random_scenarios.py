@@ -1,3 +1,4 @@
+import datetime
 import time
 import typing as t
 from dataclasses import dataclass
@@ -221,7 +222,7 @@ def generate_scenario(
 
 def share_estim(voting_escrow, window, user):
     assert window // EPOCH_SECONDS * EPOCH_SECONDS == window
-    n = 600  # todo 200
+    n = 100  # todo 200
     d = EPOCH_SECONDS // n
     assert d * n == EPOCH_SECONDS
     balances = [
@@ -256,7 +257,7 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
     max_stake_amount = 10 * voting_escrow.min_stake_amount()
 
     approx_rel = 0.03  # todo 0.03
-    n_user_actions = 5  # todo set higher
+    n_user_actions = 2  # todo set higher
     n_users = 5
     n_rewards = n_user_actions * n_users
     users = users[:n_users]
@@ -291,6 +292,9 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
     actions = sorted(actions, key=lambda _: _.ts)
 
     pprint.pprint(list(enumerate(actions)))
+
+    # always start at 1 jan 2023 for repeatability
+    chain.sleep(int(datetime.datetime(2023, 1, 1).timestamp() - chain.time()))
 
     start_ts = chain.time()
     print(f'{start_ts=}')
@@ -392,8 +396,8 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                 print(f'{w=} {window_rewards=} {share=}')
                 averageUserBalanaceOverWindow = voting_escrow.averageUserBalanaceOverWindow(action.user, w)
                 averageTotalSupplyOverWindow = voting_escrow.averageTotalSupplyOverWindow(w)
-                averageUserBalanaceOverWindowTx = voting_escrow.averageUserBalanaceOverWindowTx(action.user, w)
-                averageTotalSupplyOverWindowTx = voting_escrow.averageTotalSupplyOverWindowTx(w)
+                averageUserBalanaceOverWindowTx = voting_escrow.averageUserBalanaceOverWindow.transact(action.user, w)
+                averageTotalSupplyOverWindowTx = voting_escrow.averageTotalSupplyOverWindow.transact(w)
                 print(f'{w=}, averageUserBalanaceOverWindow={round(averageUserBalanaceOverWindow/1e18, 4)}, averageTotalSupplyOverWindow={round(averageTotalSupplyOverWindow/1e18, 4)}')
 
                 def get_history_epochs(voting_escrow):
@@ -477,9 +481,9 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
         print(f'SET {last_ts=}')
         # last_ts = chain.time()
 
-        import random
-        if random.random() > 0.5:
-            voting_escrow.checkpoint()
+        # import random
+        # if random.random() > 0.5:
+        #     voting_escrow.checkpoint()
 
 
 def test_share_rewards_2users_same_window_reward(web3, chain, accounts, token, voting_escrow):
@@ -585,7 +589,7 @@ def test_share_rewards_2users_same_window_reward(web3, chain, accounts, token, v
     user2_share = (user2_start_balance + user2_end_balance) / (supply_start + supply_end)
 
     print(f'start claim user1')
-    claimable_tx = voting_escrow.user_token_claimable_rewardsTx(user1, token)
+    claimable_tx = voting_escrow.user_token_claimable_rewards.transact(user1, token)
     print(f'{claimable_tx.events=}')
     claimable1 = voting_escrow.user_token_claimable_rewards(user1, token)
     claim_tx1 = voting_escrow.claim_rewards(token, {"from": user1})
@@ -666,3 +670,8 @@ def test_emergency(web3, chain, accounts, token, voting_escrow, owner):
 def test_set_min_delay_between_manual_checkpoint(web3, chain, accounts, token, voting_escrow, owner):
     voting_escrow.set_min_delay_between_manual_checkpoint(600, {"from": owner})
     assert voting_escrow.min_delay_between_manual_checkpoint() == 600
+
+
+def test_transfer_ownership(web3, chain, accounts, token, voting_escrow, owner):
+    voting_escrow.transfer_ownership(accounts[-1], {"from": owner})
+    assert voting_escrow.admin() == accounts[-1]

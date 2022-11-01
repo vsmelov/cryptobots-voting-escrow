@@ -112,7 +112,7 @@ def EPOCH_SECONDS() -> uint256:
 def MAXTIME() -> uint256:
     return MAXTIME
 
-settings: public(address)
+settings: public(address)  # some logic is moved to a separate contract and used via DELEGATECALL
 
 ADMIN_HASH: constant(bytes32) = keccak256("admin")
 @external
@@ -184,7 +184,7 @@ user_point_history: public(HashMap[address, Point[1000000000]])  # user -> Point
 user_point_epoch: public(HashMap[address, uint256])  # user -> current user epoch (its different scale with just epochs)
 slope_changes: public(HashMap[uint256, int128])  # time -> signed slope change
 
-# debugging information
+# debugging information, uncomment for debugging
 # slope_changes_keys: public(uint256[100000])
 # slope_changes_keys_next_index: public(uint256)
 
@@ -1046,11 +1046,6 @@ def anyTrapezoidArea(
 
 
 @external
-def averageUserBalanaceOverWindowTx(addr: address, _window: uint256) -> uint256:
-    return self._averageUserBalanaceOverWindow(addr, _window)
-
-
-@external
 @view
 def averageUserBalanaceOverWindow(addr: address, _window: uint256) -> uint256:
     return self._averageUserBalanaceOverWindow(addr, _window)
@@ -1134,11 +1129,6 @@ event _averageTotalSupplyOverEpoch:
     bias_end: int128
     slope: int128
     result: uint256
-
-
-@external
-def averageTotalSupplyOverWindowTx(_window: uint256) -> uint256:
-    return self._averageTotalSupplyOverWindow(_window)
 
 
 @external
@@ -1377,14 +1367,6 @@ def _user_token_claimable_rewards(user: address, _token: address) -> (uint256, u
         )
         rewardsAmount += _thisWindowUserReward
     return rewardsAmount, _window
-
-
-@external
-def user_token_claimable_rewardsTx(user: address, _token: address) -> uint256:
-    rewardsAmount: uint256 = 0
-    lastProcessedWindow: uint256 = 0
-    (rewardsAmount, lastProcessedWindow) = self._user_token_claimable_rewards(user, _token)
-    return rewardsAmount
 
 
 @external
