@@ -1452,6 +1452,7 @@ def claim_rewards(_token: address):
     self.user_token_claimed_window[msg.sender][_token] = lastProcessedWindow
     log UserClaimWindowEnd(lastProcessedWindow)
 
+    # if rewardsAmount > 0:
     self.any_transfer(_token, msg.sender, rewardsAmount)
     log UserRewardsClaimed(lastProcessedWindow, _token, rewardsAmount)
 

@@ -54,7 +54,7 @@ class UserWithdraw:
 
 
 max_delay = 365 * 24 * 3600  # out of gas :-(
-max_delay = 30 * 24 * 3600
+max_delay = 7 * 24 * 3600
 
 
 def generate_rewards(n_actions: int, min_rewards_ampunt: int, max_rewards_amount: int) -> t.List[Reward]:
@@ -220,9 +220,8 @@ def generate_scenario(
 #     assert window_rewards * estimation_share == claimed_amount
 
 
-def share_estim(voting_escrow, window, user):
+def share_estim(voting_escrow, window, user, n=200):
     assert window // EPOCH_SECONDS * EPOCH_SECONDS == window
-    n = 100  # todo 200
     d = EPOCH_SECONDS // n
     assert d * n == EPOCH_SECONDS
     balances = [
@@ -256,8 +255,8 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
     min_stake_amount = voting_escrow.min_stake_amount()
     max_stake_amount = 10 * voting_escrow.min_stake_amount()
 
-    approx_rel = 0.03  # todo 0.03
-    n_user_actions = 2  # todo set higher
+    approx_rel = 0.03  # todo 0.01
+    n_user_actions = 10  # todo 20
     n_users = 5
     n_rewards = n_user_actions * n_users
     users = users[:n_users]
@@ -441,8 +440,11 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                     pprint.pprint(get_history_epochs(voting_escrow))
                 print(f'{get_history(w, voting_escrow)=}')
 
-                print(f'{averageUserBalanaceOverWindowTx.events=}')
-                print(f'{averageTotalSupplyOverWindowTx.events=}')
+                print(f'averageUserBalanaceOverWindowTx:')
+                pretty_events(chain, averageUserBalanaceOverWindowTx.txid)
+
+                print(f'averageTotalSupplyOverWindowTx:')
+                pretty_events(chain, averageTotalSupplyOverWindowTx.txid)
 
                 if averageTotalSupplyOverWindow == 0:
                     assert averageUserBalanaceOverWindow == 0
