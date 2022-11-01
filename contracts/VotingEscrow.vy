@@ -9,10 +9,224 @@
      more than `MAXTIME` (4 years).
 """
 
-# for delegate calls
+#### for delegate calls
 storageUInt256: HashMap[bytes32, uint256]
 storageAddress: HashMap[bytes32, address]
 storageBool: HashMap[bytes32, bool]
+
+#### settings
+
+settings: public(address)  # some logic is moved to a separate contract and used via DELEGATECALL
+
+MIN_DELAY_BETWEEN_MANUAL_CHECKPOINT_HASH: constant(bytes32) = keccak256("min_delay_between_manual_checkpoint")  # uint256
+MAX_POOL_MEMBERS_HASH: constant(bytes32) = keccak256("max_pool_members")  # uint256
+MIN_STAKE_AMOUNT_HASH: constant(bytes32) = keccak256("min_stake_amount")  # uint256
+EMERGENCY_HASH: constant(bytes32) = keccak256("emergency")  # bool
+INCREASE_UNLOCK_TIME_DISABLED_HASH: constant(bytes32) = keccak256("increase_unlock_time_disabled")  # bool
+CREATE_LOCK_DISABLED_HASH: constant(bytes32) = keccak256("create_lock_disabled")  # bool
+WITHDRAW_DISABLED_HASH: constant(bytes32) = keccak256("withdraw_disabled")  # bool
+INCREASE_AMOUNT_DISABLED_HASH: constant(bytes32) = keccak256("increase_amount_disabled")  # bool
+SMART_WALLET_CHECKER_HASH: constant(bytes32) = keccak256("smart_wallet_checker")  # address
+
+
+event MinDelayBetweenManualCheckpointSet:
+    value: uint256
+
+
+@external
+@view
+def min_delay_between_manual_checkpoint() -> uint256:
+    return self.storageUInt256[MIN_DELAY_BETWEEN_MANUAL_CHECKPOINT_HASH]
+
+
+@external
+@view
+def smart_wallet_checker() -> address:
+    return self.storageAddress[SMART_WALLET_CHECKER_HASH]
+
+
+@external
+@view
+def emergency() -> bool:
+    return self.storageBool[EMERGENCY_HASH]
+
+
+@external
+def set_min_delay_between_manual_checkpoint(_value: uint256):
+    raw_call(
+        self.settings,
+        _abi_encode(_value, method_id=method_id("set_min_delay_between_manual_checkpoint(uint256)")),
+        is_delegate_call=True
+    )
+
+
+@external
+@view
+def withdraw_disabled() -> bool:
+    return self.storageBool[WITHDRAW_DISABLED_HASH]
+
+
+@external
+@view
+def increase_amount_disabled() -> bool:
+    return self.storageBool[INCREASE_AMOUNT_DISABLED_HASH]
+
+
+@external
+@view
+def increase_unlock_time_disabled() -> bool:
+    return self.storageBool[INCREASE_UNLOCK_TIME_DISABLED_HASH]
+
+
+@external
+@view
+def create_lock_disabled() -> bool:
+    return self.storageBool[CREATE_LOCK_DISABLED_HASH]
+
+
+event IncreaseAmountDisabledSet:
+    value: bool
+
+
+event IncreaseUnlockTimeDisabledSet:
+    value: bool
+
+
+event CreateLockDisabledSet:
+    value: bool
+
+
+event WithdrawDisabledSet:
+    value: bool
+
+
+event MinStakeAmountSet:
+    value: uint256
+
+
+event MaxPoolMembersSet:
+    value: uint256
+
+
+event Emergency:
+    pass
+
+
+@external
+def enable_emergency():
+    raw_call(
+        self.settings,
+        method_id("enable_emergency()"),
+        is_delegate_call=True
+    )
+
+
+ADMIN_HASH: constant(bytes32) = keccak256("admin")
+@external
+@view
+def admin() -> address:
+    return self._admin()
+
+
+@internal
+@view
+def _admin() -> address:
+    return self.storageAddress[ADMIN_HASH]
+
+
+
+@external
+def set_max_pool_members(_value: uint256):
+    raw_call(
+        self.settings,
+        _abi_encode(_value, method_id=method_id("set_max_pool_members(uint256)")),
+        is_delegate_call=True
+    )
+
+
+@external
+@view
+def min_stake_amount() -> uint256:
+    return self.storageUInt256[MIN_STAKE_AMOUNT_HASH]
+
+
+@external
+def set_min_stake_amount(_value: uint256):
+    raw_call(
+        self.settings,
+        _abi_encode(_value, method_id=method_id("set_min_stake_amount(uint256)")),
+        is_delegate_call=True
+    )
+
+
+@external
+def set_withdraw_disabled(_value: bool):
+    raw_call(
+        self.settings,
+        _abi_encode(_value, method_id=method_id("set_withdraw_disabled(bool)")),
+        is_delegate_call=True
+    )
+
+
+@external
+def set_create_lock_disabled(_value: bool):
+    raw_call(
+        self.settings,
+        _abi_encode(_value, method_id=method_id("set_create_lock_disabled(bool)")),
+        is_delegate_call=True
+    )
+
+
+
+@external
+def set_increase_amount_disabled(_value: bool):
+    raw_call(
+        self.settings,
+        _abi_encode(_value, method_id=method_id("set_increase_amount_disabled(bool)")),
+        is_delegate_call=True
+    )
+
+
+@external
+def set_increase_unlock_time_disabled(_value: bool):
+    raw_call(
+        self.settings,
+        _abi_encode(_value, method_id=method_id("set_increase_unlock_time_disabled(bool)")),
+        is_delegate_call=True
+    )
+
+
+
+@external
+@view
+def max_pool_members() -> uint256:
+    return self.storageUInt256[MAX_POOL_MEMBERS_HASH]
+
+
+@external
+def transfer_ownership(addr: address):
+    """
+    @notice Transfer ownership of VotingEscrow contract to `addr`
+    @param addr Address to have ownership transferred to
+    """
+    raw_call(
+        self.settings,
+        _abi_encode(addr, method_id=method_id("transfer_ownership(address)")),
+        is_delegate_call=True
+    )
+
+
+@external
+def set_smart_wallet_checker(addr: address):
+    """
+    @notice Apply setting external contract to check approved smart contract wallets
+    """
+    raw_call(
+        self.settings,
+        _abi_encode(addr, method_id=method_id("set_smart_wallet_checker(address)")),
+        is_delegate_call=True
+    )
+
 
 # Voting escrow to have time-weighted votes
 # Votes have a weight depending on time, so that users are committed
@@ -64,7 +278,7 @@ CREATE_LOCK_TYPE: constant(int128) = 1
 INCREASE_LOCK_AMOUNT: constant(int128) = 2
 INCREASE_UNLOCK_TIME: constant(int128) = 3
 
-stuckWindowRewardClaimed: public(HashMap[uint256, bool])
+stuckWindowRewardClaimed: public(HashMap[uint256, bool])  # window -> flag
 
 event StuckWindowRewardClaimed:
     epoch: indexed(uint256)
@@ -95,9 +309,7 @@ event Supply:
     supply: uint256
 
 
-# EPOCH_SECONDS: constant(uint256) = 24 * 3600
 EPOCH_SECONDS: constant(uint256) = 24 * 3600
-# EPOCH_SECONDS: constant(uint256) = 600
 MAXTIME: constant(uint256) = 4 * 365 * 86400  # 4 years
 MULTIPLIER: constant(uint256) = 10 ** 18
 
@@ -112,61 +324,8 @@ def EPOCH_SECONDS() -> uint256:
 def MAXTIME() -> uint256:
     return MAXTIME
 
-settings: public(address)  # some logic is moved to a separate contract and used via DELEGATECALL
-
-ADMIN_HASH: constant(bytes32) = keccak256("admin")
-@external
-@view
-def admin() -> address:
-    return self._admin()
-
-
-@internal
-@view
-def _admin() -> address:
-    return self.storageAddress[ADMIN_HASH]
-
 
 last_manual_checkpoint_timestamp: public(uint256)
-MIN_DELAY_BETWEEN_MANUAL_CHECKPOINT_HASH: constant(bytes32) = keccak256("min_delay_between_manual_checkpoint")
-EMERGENCY_HASH: constant(bytes32) = keccak256("emergency")
-
-
-@external
-@view
-def min_delay_between_manual_checkpoint() -> uint256:
-    return self.storageUInt256[MIN_DELAY_BETWEEN_MANUAL_CHECKPOINT_HASH]
-
-
-@internal
-@view
-def _min_delay_between_manual_checkpoint() -> uint256:
-    return self.storageUInt256[MIN_DELAY_BETWEEN_MANUAL_CHECKPOINT_HASH]
-
-
-@internal
-@view
-def _emergency() -> bool:
-    return self.storageBool[EMERGENCY_HASH]
-
-
-@external
-@view
-def emergency() -> bool:
-    return self._emergency()
-
-
-event MinDelayBetweenManualCheckpointSet:
-    value: uint256
-
-
-@external
-def set_min_delay_between_manual_checkpoint(_value: uint256):
-    raw_call(
-        self.settings,
-        _abi_encode(_value, method_id=method_id("set_min_delay_between_manual_checkpoint(uint256)")),
-        is_delegate_call=True
-    )
 
 token: public(address)
 supply: public(uint256)
@@ -189,50 +348,11 @@ slope_changes: public(HashMap[uint256, int128])  # time -> signed slope change
 # slope_changes_keys_next_index: public(uint256)
 
 pool_members: public(uint256)  # how many participants are already in the pool
-max_pool_members: public(uint256)  # maximum number of the pool participants
-min_stake_amount: public(uint256)  # min amount to stake (or increase)
 
 name: public(String[64])
 symbol: public(String[32])
 version: public(String[32])
 decimals: public(uint256)
-
-# Checker for whitelisted (smart contract) wallets which are allowed to deposit
-# The goal is to prevent tokenizing the escrow
-smart_wallet_checker: public(address)
-
-increase_amount_disabled: public(bool)
-increase_unlock_time_disabled: public(bool)
-create_lock_disabled: public(bool)
-withdraw_disabled: public(bool)
-
-
-event IncreaseAmountDisabledSet:
-    value: bool
-
-
-event IncreaseUnlockTimeDisabledSet:
-    value: bool
-
-
-event CreateLockDisabledSet:
-    value: bool
-
-
-event WithdrawDisabledSet:
-    value: bool
-
-
-event MinStakeAmountSet:
-    value: uint256
-
-
-event MaxPoolMembersSet:
-    value: uint256
-
-
-event Emergency:
-    pass
 
 
 event TransferNative:
@@ -240,65 +360,20 @@ event TransferNative:
     value: uint256
 
 
-@external
-def enable_emergency():
-    raw_call(
-        self.settings,
-        method_id("enable_emergency()"),
-        is_delegate_call=True
-    )
+ERROR_NOT_ADMIN: constant(String[9]) = "not admin"
+
+
+# supports upgrades
+_initialized: bool
 
 
 @external
-def set_max_pool_members(_value: uint256):
-    assert msg.sender == self._admin()
-    assert self.max_pool_members != _value
-    self.max_pool_members = _value
-    log MaxPoolMembersSet(_value)
+def __init__():
+    pass
 
 
 @external
-def set_min_stake_amount(_value: uint256):
-    assert msg.sender == self._admin()
-    assert self.min_stake_amount != _value
-    self.min_stake_amount = _value
-    log MinStakeAmountSet(_value)
-
-
-@external
-def set_withdraw_disabled(_value: bool):
-    assert msg.sender == self._admin()
-    assert self.withdraw_disabled != _value
-    self.withdraw_disabled = _value
-    log WithdrawDisabledSet(_value)
-
-
-@external
-def set_create_lock_disabled(_value: bool):
-    assert msg.sender == self._admin()
-    assert self.create_lock_disabled != _value
-    self.create_lock_disabled = _value
-    log CreateLockDisabledSet(_value)
-
-
-@external
-def set_increase_amount_disabled(_value: bool):
-    assert msg.sender == self._admin()
-    assert self.increase_amount_disabled != _value
-    self.increase_amount_disabled = _value
-    log IncreaseAmountDisabledSet(_value)
-
-
-@external
-def set_increase_unlock_time_disabled(_value: bool):
-    assert msg.sender == self._admin()
-    assert self.increase_unlock_time_disabled != _value
-    self.increase_unlock_time_disabled = _value
-    log IncreaseUnlockTimeDisabledSet(_value)
-
-
-@external
-def __init__(
+def initialize(
     settings_addr: address,
     token_addr: address,
     _name: String[64],
@@ -308,13 +383,15 @@ def __init__(
     _min_stake_amount: uint256,
 ):
     """
-    @notice Contract constructor
+    @notice Contract initializer
     @param settings_addr VotingEscrowSettings address
     @param token_addr `ERC20CRV` token address
     @param _name Token name
     @param _symbol Token symbol
     @param _version Contract version - required for Aragon compatibility
     """
+    assert not self._initialized, "initialized"
+    self._initialized = True
     self.settings = settings_addr
     self.storageAddress[ADMIN_HASH] = msg.sender
     self.token = token_addr
@@ -331,44 +408,8 @@ def __init__(
 
     # self.slope_changes_keys_next_index = 0  # debugging
 
-    self.max_pool_members = _max_pool_members
-    self.min_stake_amount = _min_stake_amount
-
-
-@external
-def transfer_ownership(addr: address):
-    """
-    @notice Transfer ownership of VotingEscrow contract to `addr`
-    @param addr Address to have ownership transferred to
-    """
-    raw_call(
-        self.settings,
-        _abi_encode(addr, method_id=method_id("transfer_ownership(address)")),
-        is_delegate_call=True
-    )
-
-
-@external
-def set_smart_wallet_checker(addr: address):
-    """
-    @notice Apply setting external contract to check approved smart contract wallets
-    """
-    assert msg.sender == self._admin(), "not admin"
-    self.smart_wallet_checker = addr
-
-
-@internal
-def assert_not_contract(addr: address):
-    """
-    @notice Check if the call is from a whitelisted smart contract, revert if not
-    @param addr Address to be checked
-    """
-    if addr != tx.origin:
-        checker: address = self.smart_wallet_checker
-        if checker != ZERO_ADDRESS:
-            if SmartWalletChecker(checker).check(addr):
-                return
-        raise "Smart contract depositors not allowed"
+    self.storageUInt256[MAX_POOL_MEMBERS_HASH] = _max_pool_members
+    self.storageUInt256[MIN_STAKE_AMOUNT_HASH] = _min_stake_amount
 
 
 # debugging
@@ -664,7 +705,7 @@ def _deposit_for(
     self._checkpoint(_addr, old_locked, _locked)
 
     if _value != 0:
-        assert ERC20(self.token).transferFrom(_addr, self, _value)
+        assert ERC20(self.token).transferFrom(_addr, self, _value), "transfer failed"
 
     log Deposit(_addr, _value, _locked.end, type, block.timestamp)
     log Supply(supply_before, supply_before + _value)
@@ -676,7 +717,7 @@ def checkpoint():
     @notice Record global data to checkpoint
     """
     delay: uint256 = block.timestamp - self.last_manual_checkpoint_timestamp
-    assert delay >= self._min_delay_between_manual_checkpoint(), "min delay failed"
+    assert delay >= self.storageUInt256[MIN_DELAY_BETWEEN_MANUAL_CHECKPOINT_HASH], "min delay failed"
     self.last_manual_checkpoint_timestamp = block.timestamp
     self._checkpoint(ZERO_ADDRESS, empty(LockedBalance), empty(LockedBalance))
 
@@ -691,16 +732,15 @@ def deposit_for(_addr: address, _value: uint256):
     @param _addr User's wallet address
     @param _value Amount to add to user's lock
     """
-    assert not self.increase_amount_disabled, "increase amount disabled"
-    assert not self._emergency(), "not allowed in emergency"
+    assert not self.storageBool[INCREASE_AMOUNT_DISABLED_HASH], "disabled"
+    assert not self.storageBool[EMERGENCY_HASH], "emergency"
 
     _locked: LockedBalance = self.locked[_addr]
 
-    assert _value > 0, "zero stake not allowed"
-    assert _value >= self.min_stake_amount, "too small stake amount"
+    assert _value >= self.storageUInt256[MIN_STAKE_AMOUNT_HASH] and _value > 0, "too small"
 
-    assert _locked.amount > 0, "No existing lock found"
-    assert _locked.end > block.timestamp, "Cannot add to expired lock. Withdraw"
+    assert _locked.amount > 0, "not exist"
+    assert _locked.end > block.timestamp, "cannot add to expired"
 
     self._deposit_for(_addr, _value, 0, self.locked[_addr], DEPOSIT_FOR_TYPE)
 
@@ -713,23 +753,27 @@ def create_lock(_value: uint256, _unlock_time: uint256):
     @param _value Amount to deposit
     @param _unlock_time Epoch time when tokens unlock, rounded down to whole weeks
     """
-    assert not self.create_lock_disabled, "create lock disabled"
-    assert not self._emergency(), "not allowed in emergency"
+    assert not self.storageBool[CREATE_LOCK_DISABLED_HASH], "disabled"
+    assert not self.storageBool[EMERGENCY_HASH], "emergency"
 
-    self.assert_not_contract(msg.sender)
+    raw_call(  # assert_not_contract
+        self.settings,
+        _abi_encode(msg.sender, method_id=method_id("assert_not_contract(address)")),
+        is_delegate_call=True
+    )
+
     unlock_time: uint256 = (_unlock_time / EPOCH_SECONDS) * EPOCH_SECONDS  # Locktime is rounded down to weeks
     _locked: LockedBalance = self.locked[msg.sender]
 
     self.user_token_claimed_window_start[msg.sender] = self._currentWindow() - EPOCH_SECONDS   # to not process reward from =0
     self.pool_members += 1
-    assert self.pool_members <= self.max_pool_members, "max_pool_members exceed"
+    assert self.pool_members <= self.storageUInt256[MAX_POOL_MEMBERS_HASH], "max_pool_members exceed"
 
-    assert _value > 0, "zero stake not allowed"
-    assert _value >= self.min_stake_amount, "too small stake amount"
+    assert _value >= self.storageUInt256[MIN_STAKE_AMOUNT_HASH] and _value > 0, "too small"
 
-    assert _locked.amount == 0, "Withdraw old tokens first"
-    assert unlock_time > block.timestamp, "Can only lock until time in the future"
-    assert unlock_time <= block.timestamp + MAXTIME, "Voting lock can be 4 years max"
+    assert _locked.amount == 0, "withdraw old tokens first"
+    assert unlock_time > block.timestamp, "can only lock until time in the future"
+    assert unlock_time <= block.timestamp + MAXTIME, "voting lock can be 4 years max"
 
     self._deposit_for(msg.sender, _value, unlock_time, _locked, CREATE_LOCK_TYPE)
 
@@ -742,17 +786,20 @@ def increase_amount(_value: uint256):
             without modifying the unlock time
     @param _value Amount of tokens to deposit and add to the lock
     """
-    assert not self.increase_amount_disabled, "increase amount disabled"
-    assert not self._emergency(), "not allowed in emergency"
+    assert not self.storageBool[INCREASE_AMOUNT_DISABLED_HASH], "disabled"
+    assert not self.storageBool[EMERGENCY_HASH], "emergency"
 
-    self.assert_not_contract(msg.sender)
+    raw_call(  # assert_not_contract
+        self.settings,
+        _abi_encode(msg.sender, method_id=method_id("assert_not_contract(address)")),
+        is_delegate_call=True
+    )
     _locked: LockedBalance = self.locked[msg.sender]
 
-    assert _value > 0, "zero stake not allowed"
-    assert _value >= self.min_stake_amount, "too small stake amount"
+    assert _value >= self.storageUInt256[MIN_STAKE_AMOUNT_HASH] and _value > 0, "too small"
 
-    assert _locked.amount > 0, "No existing lock found"
-    assert _locked.end > block.timestamp, "Cannot add to expired lock. Withdraw"
+    assert _locked.amount > 0, "not exist"
+    assert _locked.end > block.timestamp, "cannot add to expired lock"
 
     self._deposit_for(msg.sender, _value, 0, _locked, INCREASE_LOCK_AMOUNT)
 
@@ -764,10 +811,14 @@ def increase_unlock_time(_unlock_time: uint256):
     @notice Extend the unlock time for `msg.sender` to `_unlock_time`
     @param _unlock_time New epoch time for unlocking
     """
-    assert not self.increase_unlock_time_disabled, "increase unlock time disabled"
-    assert not self._emergency(), "not allowed in emergency"
+    assert not self.storageBool[INCREASE_UNLOCK_TIME_DISABLED_HASH], "disabled"
+    assert not self.storageBool[EMERGENCY_HASH], "emergency"
 
-    self.assert_not_contract(msg.sender)
+    raw_call(  # assert_not_contract
+        self.settings,
+        _abi_encode(msg.sender, method_id=method_id("assert_not_contract(address)")),
+        is_delegate_call=True
+    )
     _locked: LockedBalance = self.locked[msg.sender]
     unlock_time: uint256 = (_unlock_time / EPOCH_SECONDS) * EPOCH_SECONDS  # Locktime is rounded down to weeks
 
@@ -786,13 +837,13 @@ def withdraw():
     @notice Withdraw all tokens for `msg.sender`
     @dev Only possible if the lock has expired
     """
-    assert not self.withdraw_disabled, "withdraw disabled"
+    assert not self.storageBool[WITHDRAW_DISABLED_HASH], "disabled"
 
     _locked: LockedBalance = self.locked[msg.sender]
     value: uint256 = convert(_locked.amount, uint256)
     supply_before: uint256 = self.supply
 
-    if self._emergency():
+    if self.storageBool[EMERGENCY_HASH]:
         # in emergency we do not check _locked.end neither update checkpoints
         _locked.end = 0
         _locked.amount = 0
@@ -810,7 +861,7 @@ def withdraw():
         # Both can have >= 0 amount
         self._checkpoint(msg.sender, old_locked, _locked)
 
-    assert ERC20(self.token).transfer(msg.sender, value)
+    assert ERC20(self.token).transfer(msg.sender, value), "transfer failed"
 
     self.pool_members -= 1
 
@@ -1023,7 +1074,7 @@ event _averageUserBalanceOverWindowDebugS:
 
 
 @internal
-@pure
+@view
 def anyTrapezoidArea(
     _bias_ts: uint256,
     _bias: int128,
@@ -1031,18 +1082,20 @@ def anyTrapezoidArea(
     _ts0: uint256,
     _ts1: uint256
 ) -> uint256:
-    assert _ts1 >= _ts0, "wrong ts"
-    start_bias: int128 = _bias - _slope * convert(_ts0 - _bias_ts, int128)
-    end_bias: int128 = _bias - _slope * convert(_ts1 - _bias_ts, int128)
-    if start_bias < 0:
-        return 0
-    elif end_bias < 0:
-        end_ts: uint256 = _ts0 + convert(_bias / _slope, uint256)
-        _ts: uint256 = end_ts - _ts0
-        return convert(start_bias, uint256) * _ts / 2  # triangle
-    else:
-        _ts: uint256 = _ts1 - _ts0
-        return _ts * convert(start_bias + end_bias, uint256) / 2  # trapezoid
+    _response: Bytes[32] = raw_call(  # assert_not_contract
+        self.settings,
+        _abi_encode(
+            _bias_ts,
+            _bias,
+            _slope,
+            _ts0,
+            _ts1,
+            method_id=method_id("anyTrapezoidArea(uint256,int128,int128,uint256,uint256)")
+        ),
+        max_outsize=32,
+        is_static_call=True,
+    )
+    return convert(_response, uint256)
 
 
 @external
@@ -1088,8 +1141,7 @@ def _averageUserBalanaceOverWindow(addr: address, _window: uint256) -> uint256:
         areaUnderPolyline += trapezoidArea
 
         if ts_end == ts_start:  # this is a specific case when interval=0
-            assert user_epoch_start == user_epoch_end
-            assert _ts0 == _ts1
+            assert user_epoch_start == user_epoch_end and _ts0 == _ts1, "impossible state"
             log _averageUserBalanceOverWindowDebugSZeroInterval(
                 user_epoch,
                 bias,
@@ -1384,7 +1436,7 @@ def user_token_claimable_rewards(user: address, _token: address) -> uint256:
 # stuck reward to the owner
 @external
 def claim_stuck_rewards(_token: address, _window: uint256):
-    assert msg.sender == self._admin()
+    assert msg.sender == self._admin(), "not admin"
     assert _window < self._currentWindow(), "unfinalized window"
     assert not self.stuckWindowRewardClaimed[_window], "already claimed"
     self.stuckWindowRewardClaimed[_window] = True
@@ -1403,7 +1455,7 @@ def claim_stuck_rewards(_token: address, _window: uint256):
 
 @external
 def claim_rewards(_token: address):
-    assert not self._emergency(), "emergency!"
+    assert not self.storageBool[EMERGENCY_HASH], "emergency"
     rewardsAmount: uint256 = 0
     lastProcessedWindow: uint256 = 0
     (rewardsAmount, lastProcessedWindow) = self._user_token_claimable_rewards(msg.sender, _token)

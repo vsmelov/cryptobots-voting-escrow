@@ -334,7 +334,7 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                 )
                 pretty_events(chain, tx.txid)
             else:
-                with brownie.reverts("Cannot add to expired lock. Withdraw"):
+                with brownie.reverts("cannot add to expired lock"):
                     voting_escrow.increase_amount(
                         action.amount,
                         {"from": action.user},
