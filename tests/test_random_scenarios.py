@@ -610,6 +610,23 @@ def test_share_rewards_2users_same_window_reward(web3, chain, accounts, token, v
     assert abs(claimable2 + claimable1 - reward_amount) <= reward_amount * 1e-6
 
 
+def test_lock_for_max_time(web3, chain, accounts, token, voting_escrow, owner):
+    EPOCH_SECONDS = voting_escrow.EPOCH_SECONDS()
+    sleep = EPOCH_SECONDS
+    MAXTIME = voting_escrow.MAXTIME()
+    payer = accounts[0]
+    reward_amount = 10**18
+    deposit = 10**18
+    user1 = accounts[1]
+    user2 = accounts[2]
+
+    user1_deposit_amount = deposit
+    token.transfer(user1, user1_deposit_amount)
+    token.approve(voting_escrow, user1_deposit_amount, {"from": user1})
+    user1_deposit_till = chain.time() + MAXTIME
+    tx_lock_user1 = voting_escrow.create_lock(user1_deposit_amount, user1_deposit_till, {"from": user1})
+
+
 def test_emergency(web3, chain, accounts, token, voting_escrow, owner):
     EPOCH_SECONDS = voting_escrow.EPOCH_SECONDS()
     sleep = EPOCH_SECONDS

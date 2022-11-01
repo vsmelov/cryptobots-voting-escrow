@@ -343,10 +343,6 @@ user_point_history: public(HashMap[address, Point[1000000000]])  # user -> Point
 user_point_epoch: public(HashMap[address, uint256])  # user -> current user epoch (its different scale with just epochs)
 slope_changes: public(HashMap[uint256, int128])  # time -> signed slope change
 
-# debugging information, uncomment for debugging
-# slope_changes_keys: public(uint256[100000])
-# slope_changes_keys_next_index: public(uint256)
-
 pool_members: public(uint256)  # how many participants are already in the pool
 
 name: public(String[64])
@@ -405,8 +401,6 @@ def initialize(
     self.name = _name
     self.symbol = _symbol
     self.version = _version
-
-    # self.slope_changes_keys_next_index = 0  # debugging
 
     self.storageUInt256[MAX_POOL_MEMBERS_HASH] = _max_pool_members
     self.storageUInt256[MIN_STAKE_AMOUNT_HASH] = _min_stake_amount
@@ -651,15 +645,11 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
             if new_locked.end == old_locked.end:
                 old_dslope -= u_new.slope  # It was a new deposit, not extension
             self.slope_changes[old_locked.end] = old_dslope
-            # self.slope_changes_keys[self.slope_changes_keys_next_index] = old_locked.end  # debugging
-            # self.slope_changes_keys_next_index += 1
 
         if new_locked.end > block.timestamp:
             if new_locked.end > old_locked.end:
                 new_dslope -= u_new.slope  # old slope disappeared at this point
                 self.slope_changes[new_locked.end] = new_dslope
-                # self.slope_changes_keys[self.slope_changes_keys_next_index] = new_locked.end  # debugging
-                # self.slope_changes_keys_next_index += 1
 
             # else: we recorded it already in old_dslope
 
