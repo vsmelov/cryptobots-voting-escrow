@@ -256,8 +256,8 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
     max_stake_amount = 10 * voting_escrow.min_stake_amount()
 
     approx_rel = 0.03  # todo 0.01
-    n_user_actions = 10  # todo 20
-    n_users = 5
+    n_user_actions = 3  # todo 20
+    n_users = 3
     n_rewards = n_user_actions * n_users
     users = users[:n_users]
 
@@ -321,7 +321,7 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
             assert voting_escrow.locked(action.user) == (action.amount, till // EPOCH_SECONDS * EPOCH_SECONDS)
         elif isinstance(action, UserLockIncreaseAmount):
             if voting_escrow.locked(action.user)[0] == 0:
-                with brownie.reverts("No existing lock found"):
+                with brownie.reverts("not exist"):
                     voting_escrow.increase_amount(
                         action.amount,
                         {"from": action.user},
