@@ -11,6 +11,10 @@ networks:
     cmd_settings:
       unlock: 0xC447FcAF1dEf19A583F97b3620627BF69c05b5fB
 
+#compiler:
+#    vyper:
+#        version: 0.3.7
+
 autofetch_sources: True
 dependencies:
   - curvefi/curve-crypto-contract@1.0.0
