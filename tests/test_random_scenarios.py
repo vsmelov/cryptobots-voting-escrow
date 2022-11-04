@@ -23,6 +23,7 @@ class UserLock:
     ts: int
     amount: int
     till: int
+    ui: int
 
 
 @dataclass
@@ -30,6 +31,7 @@ class UserLockIncreaseAmount:
     user: brownie.network.account.LocalAccount
     ts: int
     amount: int
+    ui: int
 
 
 @dataclass
@@ -37,6 +39,7 @@ class UserLockIncreaseTimestamp:
     user: brownie.network.account.LocalAccount
     ts: int
     increase_till: int
+    ui: int
 
 
 @dataclass
@@ -44,6 +47,7 @@ class UserClaimRewards:
     user: brownie.network.account.LocalAccount
     ts: int
     ts: int
+    ui: int
 
 
 @dataclass
@@ -51,18 +55,26 @@ class UserWithdraw:
     user: brownie.network.account.LocalAccount
     ts: int
     ts: int
+    ui: int
 
 
-max_delay = 365 * 24 * 3600  # out of gas :-(
+# max_delay = 365 * 24 * 3600  # todo resolve out of gas :-(
 max_delay = 7 * 24 * 3600
 
 
-def generate_rewards(n_actions: int, min_rewards_ampunt: int, max_rewards_amount: int) -> t.List[Reward]:
+def generate_rewards(
+        start_ts: int,
+        n_actions: int,
+        min_rewards_ampunt: int,
+        max_rewards_amount: int,
+) -> t.List[Reward]:
     result = []
     for i in range(n_actions):
         result.append(Reward(ts=random.randint(0, max_delay), amount=random.randint(min_rewards_ampunt, max_rewards_amount)))
-    for i in range(1, len(result)):
-        result[i].ts += result[i - 1].ts
+    if n_actions > 0:
+        result[0].ts += start_ts
+        for i in range(1, len(result)):
+            result[i].ts += result[i - 1].ts
     return result
 
 
@@ -70,6 +82,7 @@ EPOCH_SECONDS = 24 * 3600
 
 
 def generate_user_actions(
+    start_ts: int,
     user,
     n_actions: int,
     min_stake_amount: int,
@@ -83,17 +96,18 @@ def generate_user_actions(
     UserWithdraw,
 ]]:
     result = []
-    ts = random.randint(0, max_delay)
+    ts = start_ts + random.randint(1, max_delay)
     result.append(UserLock(
+        ui=0,
         user=user,
         ts=ts,
         amount=random.randint(min_stake_amount, max_stake_amount),
-        till=ts+random.randint(0, max_delay)+EPOCH_SECONDS,
+        till=ts+random.randint(1, max_delay)+EPOCH_SECONDS,
     ))
     last_change_action = UserLock
-    last_till = result[-1].till
+    last_till = result[-1].till // EPOCH_SECONDS * EPOCH_SECONDS
 
-    for i in range(n_actions-1):
+    for i in range(1, n_actions):
         if last_change_action == UserLock:
             choice = random.choice([
                 UserLockIncreaseAmount,
@@ -109,45 +123,51 @@ def generate_user_actions(
             raise ValueError(last_change_action)
 
         if choice == UserLock:
-            ts = max(result[-1].ts, last_till) + random.randint(0, max_delay)
+            ts = max(result[-1].ts, last_till) + random.randint(1, max_delay)
             result.append(UserLock(
                 user=user,
                 ts=ts,
-                till=ts+random.randint(0, max_delay) + EPOCH_SECONDS,
+                till=ts+random.randint(1, max_delay) + EPOCH_SECONDS,
                 amount=random.randint(min_stake_amount, max_stake_amount),
+                ui=i,
             ))
-            # last_till = result[-1].till // EPOCH_SECONDS * EPOCH_SECONDS
-            last_till = result[-1].till
+            last_till = result[-1].till // EPOCH_SECONDS * EPOCH_SECONDS
             last_change_action = UserLock
         elif choice == UserLockIncreaseAmount:
+            ts = result[-1].ts + random.randint(1, max_delay)
             result.append(UserLockIncreaseAmount(
                 user=user,
-                ts=result[i-1].ts+random.randint(0, min(max_delay, last_till)),
+                ts=min(ts, last_till-1),
                 amount=random.randint(min_stake_amount, max_stake_amount),
+                ui=i,
             ))
         elif choice == UserLockIncreaseTimestamp:
-            result.append(UserClaimRewards(
+            ts = result[-1].ts + random.randint(0, max_delay)
+            increase_till = max(ts, last_till) + random.randint(1, max_delay) + EPOCH_SECONDS
+
+            result.append(UserLockIncreaseTimestamp(
                 user=user,
-                ts=result[i-1].ts+random.randint(0, max_delay),
-            ))  # todo
-        #     ts = result[i-1].ts + random.randint(0, max_delay)
-        #     result.append(UserLockIncreaseTimestamp(
-        #         user=user,
-        #         ts=ts,
-        #         increase_till=max(ts, last_till) + random.randint(0, max_delay) + EPOCH_SECONDS,
-        #     ))
-        #     # last_till = result[-1].increase_till // EPOCH_SECONDS * EPOCH_SECONDS
-        #     last_till = result[-1].increase_till  # xx todo some mistake here
+                ts=min(ts, last_till-1),
+                increase_till=increase_till,
+                ui=i,
+            ))
+            print(f'xx UserLockIncreaseTimestamp {user=}')
+            print(f'xx UserLockIncreaseTimestamp {last_till=}')
+            last_till = result[-1].increase_till // EPOCH_SECONDS * EPOCH_SECONDS
+            print(f'xx UserLockIncreaseTimestamp {ts=}')
+            print(f'xx UserLockIncreaseTimestamp {increase_till=}')
+            print(f'xx UserLockIncreaseTimestamp {last_till=}')
         elif choice == UserClaimRewards:
             result.append(UserClaimRewards(
                 user=user,
-                # ts=result[i-1].ts+random.randint(0, max_delay) + 365 * 24 * 3600,  # todo remove
-                ts=result[i-1].ts+random.randint(0, max_delay),
+                ts=result[-1].ts+random.randint(1, max_delay),
+                ui=i,
             ))
         elif choice == UserWithdraw:
             result.append(UserWithdraw(
-                user=user,
-                ts=last_till+random.randint(0, max_delay),  # note last_till not result[i-1].ts
+                user=user,  # todo remove EPOCH_SECONDS
+                ts=max(result[-1].ts, last_till) + random.randint(1, max_delay) + EPOCH_SECONDS,  # note last_till not result[-1].ts
+                ui=i,
             ))
             last_change_action = UserWithdraw
             last_till = result[-1].ts
@@ -173,6 +193,7 @@ class Scenario:
 
 
 def generate_scenario(
+    start_ts: int,
     users: t.List,
     n_user_actions: int,
     n_rewards: int,
@@ -183,13 +204,15 @@ def generate_scenario(
     EPOCH_SECONDS: int,
 ) -> Scenario:
     rewards = generate_rewards(
-        n_rewards,
+        n_actions=n_rewards,
+        start_ts=start_ts,
         min_rewards_ampunt=min_rewards_amount,
         max_rewards_amount=max_rewards_amount,
     )
     users_actions = {}
     for user in users:
         user_actions = generate_user_actions(
+            start_ts=start_ts,
             user=user,
             n_actions=n_user_actions,
             min_stake_amount=min_stake_amount,
@@ -197,7 +220,6 @@ def generate_scenario(
             EPOCH_SECONDS=EPOCH_SECONDS,
         )
         users_actions[user] = user_actions
-        import random
     return Scenario(rewards=rewards, users_actions=users_actions)
 
 
@@ -249,16 +271,21 @@ def share_estim(voting_escrow, window, user, n=200):
 
 
 def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
+    GAS_CHECKPOINT_CONST = 400_000
+    GAS_CHECKPOINT_VAR = 400_000
+    GAS_USER_CLAIM_CONST = 250_000
+    GAS_USER_CLAIM_VAR = 250_000
+
     EPOCH_SECONDS = voting_escrow.EPOCH_SECONDS()
     MAXTIME = voting_escrow.MAXTIME()
 
     min_stake_amount = voting_escrow.min_stake_amount()
     max_stake_amount = 10 * voting_escrow.min_stake_amount()
 
-    approx_rel = 0.03  # todo 0.01
-    n_user_actions = 3  # todo 20
-    n_users = 3
-    n_rewards = n_user_actions * n_users
+    approx_rel = 0.01
+    n_user_actions = 20
+    n_users = 5
+    n_rewards = n_user_actions * n_users // 2
     users = users[:n_users]
 
     token.approve(voting_escrow, 2**256-1, {"from": owner})
@@ -267,7 +294,13 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
         token.approve(voting_escrow, 2**256-1, {"from": user})
     del user  # to avoid namespace collision
 
+    # always start at 1 jan 2023 for repeatability
+    chain.sleep(int(datetime.datetime(2023, 1, 1).timestamp() - chain.time()))
+
+    start_ts = chain.time()
+    print(f'{start_ts=}')
     scenario = generate_scenario(
+        start_ts=start_ts,
         users=users,
         n_user_actions=n_user_actions,
         n_rewards=n_rewards,
@@ -292,26 +325,20 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
 
     pprint.pprint(list(enumerate(actions)))
 
-    # always start at 1 jan 2023 for repeatability
-    chain.sleep(int(datetime.datetime(2023, 1, 1).timestamp() - chain.time()))
-
-    start_ts = chain.time()
-    print(f'{start_ts=}')
-    last_ts = 0
-
     total_rewards = 0
 
     def process_action(action_index, action):
         nonlocal total_rewards
         if isinstance(action, Reward):
-            voting_escrow.receiveReward(
+            tx = voting_escrow.receiveReward(
                 token,
                 action.amount,
                 {"from": owner},
             )
             total_rewards += action.amount
+            assert tx.gas_used < 100_000
         elif isinstance(action, UserLock):
-            till = start_ts+action.till
+            till = action.till
             tx = voting_escrow.create_lock(
                 action.amount,
                 till,
@@ -319,6 +346,7 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
             )
             pretty_events(chain, tx.txid)
             assert voting_escrow.locked(action.user) == (action.amount, till // EPOCH_SECONDS * EPOCH_SECONDS)
+            assert tx.gas_used < GAS_CHECKPOINT_CONST + (tx.events['CheckpointEndEpoch']['epoch'] - tx.events['CheckpointStartEpoch']['epoch']) * GAS_CHECKPOINT_VAR
         elif isinstance(action, UserLockIncreaseAmount):
             if voting_escrow.locked(action.user)[0] == 0:
                 with brownie.reverts("not exist"):
@@ -326,48 +354,61 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
                         action.amount,
                         {"from": action.user},
                     )
+                print(f'SKIP UserLockIncreaseAmount because: not exist')
+                assert 0
             elif chain.time() < voting_escrow.locked(action.user)[1]:
                 tx = voting_escrow.increase_amount(
                     action.amount,
                     {"from": action.user},
                 )
                 pretty_events(chain, tx.txid)
+                assert tx.gas_used < GAS_CHECKPOINT_CONST + (tx.events['CheckpointEndEpoch']['epoch'] - tx.events['CheckpointStartEpoch']['epoch']) * GAS_CHECKPOINT_VAR
             else:
                 with brownie.reverts("cannot add to expired lock"):
                     voting_escrow.increase_amount(
                         action.amount,
                         {"from": action.user},
                     )
+                print(f'SKIP UserLockIncreaseAmount because: cannot add to expired lock')
+                assert 0
         elif isinstance(action, UserLockIncreaseTimestamp):
             if voting_escrow.locked(action.user)[0] == 0:
-                with brownie.reverts("Nothing is locked"):
+                with brownie.reverts("nothing is locked"):
                     voting_escrow.increase_unlock_time(
-                        start_ts + action.increase_till,
+                        action.increase_till,
                         {"from": action.user},
                     )
+                print(f'SKIP UserLockIncreaseTimestamp because: nothing is locked')
+                assert 0
             elif chain.time() < voting_escrow.locked(action.user)[1]:
                 tx = voting_escrow.increase_unlock_time(
-                    start_ts+action.increase_till,
+                    action.increase_till,
                     {"from": action.user},
                 )
                 pretty_events(chain, tx.txid)
+                assert tx.gas_used < GAS_CHECKPOINT_CONST + (tx.events['CheckpointEndEpoch']['epoch'] - tx.events['CheckpointStartEpoch']['epoch']) * GAS_CHECKPOINT_VAR
             else:
-                with brownie.reverts("Lock expired"):
+                with brownie.reverts("lock expired"):
                     voting_escrow.increase_unlock_time(
-                        start_ts + action.increase_till,
+                        action.increase_till,
                         {"from": action.user},
                     )
+                print(f'SKIP UserLockIncreaseTimestamp because: lock expired')
+                assert 0
         elif isinstance(action, UserWithdraw):
             locked_amount, locked_ts = voting_escrow.locked(action.user)
             if chain.time() < locked_ts:
-                with brownie.reverts("The lock didn't expire"):
+                with brownie.reverts("not expired"):
                     voting_escrow.withdraw({"from": action.user})
+                print(f'{chain.time()=}, {locked_ts=}')
                 print('withdrawn SKIP')
+                assert 0
             else:
                 tx = voting_escrow.withdraw({"from": action.user})
                 assert tx.events['Withdraw']['value'] == locked_amount
                 print('withdrawn')
                 pretty_events(chain, tx.txid)
+                assert tx.gas_used < GAS_CHECKPOINT_CONST + (tx.events['CheckpointEndEpoch']['epoch'] - tx.events['CheckpointStartEpoch']['epoch']) * GAS_CHECKPOINT_VAR
         elif isinstance(action, UserClaimRewards):
             tx = voting_escrow.claim_rewards(
                 token,
@@ -377,8 +418,9 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
             assert total_rewards >= 0, "impossible claimed rewards too much"
 
             pretty_events(chain, tx.txid)
-            window_start = tx.events['UserClaimWindowStart']['value']
+            window_start = tx.events['UserClaimWindowStart']['value']  # not guaranteed to be processed
             window_end = tx.events['UserClaimWindowEnd']['value']
+            assert tx.gas_used < GAS_USER_CLAIM_CONST + max(0, window_end - window_start) * GAS_USER_CLAIM_VAR
 
             print(f'{window_start=}')
             print(f'{window_end=}')
@@ -475,17 +517,10 @@ def test_scenario(web3, chain, accounts, token, voting_escrow, owner, users):
 
     for action_index, action in enumerate(actions):
         print(f'START {action_index=} {action=}')
-        delay = max(0, action.ts - last_ts)
+        delay = max(0, action.ts - chain.time())
+        print(f'SLEEP {delay}s, because {action.ts=} {chain.time()=}')
         chain.sleep(delay)
-        print(f'SLEEP {delay}s, because {action.ts=} {last_ts=}')
         process_action(action_index, action)
-        last_ts = action.ts
-        print(f'SET {last_ts=}')
-        # last_ts = chain.time()
-
-        # import random
-        # if random.random() > 0.5:
-        #     voting_escrow.checkpoint()
 
 
 def test_share_rewards_2users_same_window_reward(web3, chain, accounts, token, voting_escrow):

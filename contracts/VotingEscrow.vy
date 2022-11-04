@@ -386,7 +386,7 @@ def initialize(
     @param _symbol Token symbol
     @param _version Contract version - required for Aragon compatibility
     """
-    assert not self._initialized, "initialized"
+    assert not self._initialized, "inited"
     self._initialized = True
     self.settings = settings_addr
     self.storageAddress[ADMIN_HASH] = msg.sender
@@ -445,7 +445,7 @@ def handle_integrated_totalSupply_over_window(
     _last_point_window: uint256 = last_point.ts / EPOCH_SECONDS * EPOCH_SECONDS
     if _prev_point_window < _last_point_window:
         assert _last_point_window - _prev_point_window == EPOCH_SECONDS or _epoch == 1, \
-            "impossible: window_diff>EPOCH_SECONDS"
+            "diff>epoch"  # impossible: window_diff>EPOCH_SECONDS
 
         # finalize previous window aggregate
         trapezoidArea = self.anyTrapezoidArea(
@@ -484,7 +484,7 @@ def handle_integrated_totalSupply_over_window(
         )
         self.integrated_totalSupply_over_window_history_index[_prev_point_window] += 1
 
-        assert last_point.ts == _last_point_window or _epoch == 1, "impossible: no point at window start"
+        assert last_point.ts == _last_point_window or _epoch == 1, "no start"  # impossible: no point at window start
         # no need to initialize integrated_totalSupply_over_window[_last_point_window] since interval=0
     elif _prev_point_window == _last_point_window:
         # extend aggregate
@@ -528,6 +528,14 @@ def handle_integrated_totalSupply_over_window(
         raise "impossible: prev window > last"
 
 
+event CheckpointStartEpoch:
+    epoch: uint256
+
+
+event CheckpointEndEpoch:
+    epoch: uint256
+
+
 @internal
 def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBalance):
     """
@@ -541,6 +549,8 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
     old_dslope: int128 = 0
     new_dslope: int128 = 0
     _epoch: uint256 = self.epoch
+
+    log CheckpointStartEpoch(_epoch)
 
     if addr != ZERO_ADDRESS:
         # Calculate slopes and biases
@@ -613,6 +623,7 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
             last_point,
         )
 
+    log CheckpointEndEpoch(_epoch)
     self.epoch = _epoch
     # Now point_history is filled until t=now
 
@@ -694,8 +705,7 @@ def _deposit_for(
     # _locked.end > block.timestamp (always)
     self._checkpoint(_addr, old_locked, _locked)
 
-    if _value != 0:
-        assert ERC20(self.token).transferFrom(_addr, self, _value), "transfer failed"
+    self.safe_transfer_from(self.token, _addr, self, _value)
 
     log Deposit(_addr, _value, _locked.end, type, block.timestamp)
     log Supply(supply_before, supply_before + _value)
@@ -707,7 +717,7 @@ def checkpoint():
     @notice Record global data to checkpoint
     """
     delay: uint256 = block.timestamp - self.last_manual_checkpoint_timestamp
-    assert delay >= self.storageUInt256[MIN_DELAY_BETWEEN_MANUAL_CHECKPOINT_HASH], "min delay failed"
+    assert delay >= self.storageUInt256[MIN_DELAY_BETWEEN_MANUAL_CHECKPOINT_HASH], "min delay"
     self.last_manual_checkpoint_timestamp = block.timestamp
     self._checkpoint(ZERO_ADDRESS, empty(LockedBalance), empty(LockedBalance))
 
@@ -810,12 +820,12 @@ def increase_unlock_time(_unlock_time: uint256):
         is_delegate_call=True
     )
     _locked: LockedBalance = self.locked[msg.sender]
-    unlock_time: uint256 = (_unlock_time / EPOCH_SECONDS) * EPOCH_SECONDS  # Locktime is rounded down to weeks
+    unlock_time: uint256 = (_unlock_time / EPOCH_SECONDS) * EPOCH_SECONDS  # Locktime is rounded down to EPOCH
 
-    assert _locked.amount > 0, "Nothing is locked"
-    assert _locked.end > block.timestamp, "Lock expired"
-    assert unlock_time > _locked.end, "Can only increase lock duration"
-    assert unlock_time <= block.timestamp + MAXTIME, "Voting lock can be 4 years max"
+    assert _locked.amount > 0, "nothing is locked"
+    assert _locked.end > block.timestamp, "lock expired"
+    assert unlock_time > _locked.end, "can only increase lock duration"
+    assert unlock_time <= block.timestamp + MAXTIME, "voting lock can be 4 years max"
 
     self._deposit_for(msg.sender, 0, unlock_time, _locked, INCREASE_UNLOCK_TIME)
 
@@ -840,7 +850,7 @@ def withdraw():
         self.locked[msg.sender] = _locked
         self.supply = supply_before - value
     else:
-        assert block.timestamp >= _locked.end, "The lock didn't expire"
+        assert block.timestamp >= _locked.end, "not expired"
         old_locked: LockedBalance = _locked
         _locked.end = 0
         _locked.amount = 0
@@ -851,8 +861,7 @@ def withdraw():
         # Both can have >= 0 amount
         self._checkpoint(msg.sender, old_locked, _locked)
 
-    assert ERC20(self.token).transfer(msg.sender, value), "transfer failed"
-
+    self.safe_transfer(self.token, msg.sender, value)
     self.pool_members -= 1
 
     log Withdraw(msg.sender, value, block.timestamp)
@@ -1219,8 +1228,7 @@ def _averageTotalSupplyOverWindow(_window: uint256) -> uint256:
         target_epoch_start, total_supply_start = self._totalSupplyAtTimestamp(_window)
         # note: total_supply turns 0 only in window starts
         target_epoch_end, total_supply_end = self._totalSupplyAtTimestamp(_window + EPOCH_SECONDS)
-        assert _epoch == target_epoch_start, "impossible: not last epoch"
-        assert _epoch == target_epoch_end, "impossible: not last epoch"
+        assert _epoch == target_epoch_start and _epoch == target_epoch_end, "impossible: not last epoch"
         trapezoidArea = (total_supply_start + total_supply_end) * EPOCH_SECONDS / 2
         log _averageTotalSupplyOverWindow_NewWindow(
             _window,
@@ -1265,6 +1273,8 @@ def _averageTotalSupplyOverWindow(_window: uint256) -> uint256:
 # from https://ethereum.stackexchange.com/questions/84775/is-there-a-vyper-equivalent-to-openzeppelins-safeerc20-safetransfer
 @internal
 def safe_transfer(_token: address, _to: address, _value: uint256):
+    if _value == 0:
+        return
     _response: Bytes[32] = raw_call(
         _token,
         concat(
@@ -1280,6 +1290,8 @@ def safe_transfer(_token: address, _to: address, _value: uint256):
 
 @internal
 def safe_transfer_from(_token: address, _from: address, _to: address, _value: uint256):
+    if _value == 0:
+        return
     _response: Bytes[32] = raw_call(
         _token,
         concat(
@@ -1379,11 +1391,11 @@ def _user_token_claimable_rewards(user: address, _token: address) -> (uint256, u
     if _window == 0:
         _window = self.user_token_claimed_window_start[user]
         assert _window != 0, "no deposit or broken state"
-    log UserClaimWindowStart(_window)
     log Log1Args("initial _window", _window)
+    log UserClaimWindowStart(_window+EPOCH_SECONDS)  # is not guaranteed to be processed
 
     for d_window in range(365):  # max 1 year per transaction to not get out-of-gas
-        _window += EPOCH_SECONDS  # move to process the next unprocessed widnow
+        _window += EPOCH_SECONDS  # move to process the next unprocessed window
         if _window >= __currentWindow:  # note: we use >= because currentWindow is not finalized
             _window -= EPOCH_SECONDS  # we want to keep last processed value
             break
@@ -1408,6 +1420,7 @@ def _user_token_claimable_rewards(user: address, _token: address) -> (uint256, u
             _thisWindowUserReward
         )
         rewardsAmount += _thisWindowUserReward
+    log UserClaimWindowEnd(_window)
     return rewardsAmount, _window
 
 
@@ -1450,9 +1463,7 @@ def claim_rewards(_token: address):
     lastProcessedWindow: uint256 = 0
     (rewardsAmount, lastProcessedWindow) = self._user_token_claimable_rewards(msg.sender, _token)
     self.user_token_claimed_window[msg.sender][_token] = lastProcessedWindow
-    log UserClaimWindowEnd(lastProcessedWindow)
 
-    # if rewardsAmount > 0:
     self.any_transfer(_token, msg.sender, rewardsAmount)
     log UserRewardsClaimed(lastProcessedWindow, _token, rewardsAmount)
 

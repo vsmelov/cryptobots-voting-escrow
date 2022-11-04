@@ -9,3 +9,5 @@ def main():
     # print(f'{tx.revert_msg=}')
     tx.traceback()
 
+    tx.call_trace()
+
