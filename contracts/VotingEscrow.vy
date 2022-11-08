@@ -196,7 +196,6 @@ def set_increase_unlock_time_disabled(_value: bool):
     )
 
 
-
 @external
 @view
 def max_pool_members() -> uint256:
