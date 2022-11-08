@@ -12,9 +12,16 @@ networks:
       unlock: 0xC447FcAF1dEf19A583F97b3620627BF69c05b5fB
 
 compiler:
+    solc:
+        version: 0.8.6
+        optimizer:
+            enabled: true
+        remappings:
+            - "@openzeppelin=OpenZeppelin/openzeppelin-contracts@4.3.3"
     vyper:
         version: 0.3.7
 
 autofetch_sources: True
 dependencies:
   - curvefi/curve-crypto-contract@1.0.0
+  - OpenZeppelin/openzeppelin-contracts@4.3.3
