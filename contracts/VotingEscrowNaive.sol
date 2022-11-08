@@ -69,13 +69,23 @@ contract VotingEscrowNaive is Ownable {
         till = till / WINDOW * WINDOW;
         uint256 _currentWindow = currentWindow();
         uint256 period = till - block.timestamp;
+        require(till >= block.timestamp + minLockTime, "too small till");
+        require(till <= MAX_TIME, "too big till");
 
+        uint256 scaledAmount = amount * period / MAX_TIME;
 
+        windowTotalSupply[_currentWindow] += scaledAmount;
+        userWindowBalance[msg.sender] = scaledAmount;
+        userLastClaimedWindow[msg.sender] = _currentWindow;
+        userLastClaimedRewardPerToken[msg.sender] = windowRewardPerToken[_currentWindow];
 
+        for (uint256 _window = _currentWindow + WINDOW; _window < till; _window += WINDOW) {
+            uint256 _windowScaledAmount = scaledAmount * (till - _window) / period;
+            windowTotalSupply[_currentWindow] += _windowScaledAmount;
+            userWindowBalance[msg.sender] = _windowScaledAmount;
+        }
 
-        require(till >= block.timestamp + minLockTime, "small till");
-        totalLocked += amount;
-        locks[msg.sender] = UserLock(amount, till, rewardPerToken);
+        locks[msg.sender] = UserLock(amount, till);
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
     }
 
