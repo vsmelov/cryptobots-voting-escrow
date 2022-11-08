@@ -107,9 +107,27 @@ contract VotingEscrowNaive is Ownable {
     function claimReward() public {
         UserLock memory lock = locks[msg.sender];
         require(lock.amount > 0, "nothing lock");
-        uint256 reward = amount * (rewardPerToken - locks[msg.sender].claimedRewardPerToken) / ONE;
-        IERC20(rewardToken).safeTransfer(msg.sender, reward);
-        locks[msg.sender].claimedRewardPerToken = rewardPerToken;
+        uint256 _currentWindow = currentWindow();
+
+        uint256 totalReward = 0;
+        uint256 claimedRewardPerToken = userLastClaimedRewardPerToken[msg.sender];
+        for(uint256 _window=userLastClaimedWindow[msg.sender];;) {
+            uint256 _userWindowBalance = userWindowBalance[msg.sender][_window];
+            uint256 _windowRewardPerToken = windowRewardPerToken[_window];
+            uint256 reward = _userWindowBalance * (_windowRewardPerToken - claimedRewardPerToken) / ONE;
+            totalReward += reward;
+            if (_window == _currentWindow) {
+                userLastClaimedWindow[msg.sender] = _currentWindow;
+                userLastClaimedRewardPerToken[msg.sender] = _windowRewardPerToken;
+                break;
+            }
+            claimedRewardPerToken = 0;
+            unchecked {
+                _window += WINDOW;
+            }
+        }
+
+        IERC20(rewardToken).safeTransfer(msg.sender, totalReward);
     }
 
     function receiveReward(address rewardToken, uint256 amount) external {
