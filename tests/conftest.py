@@ -117,6 +117,23 @@ def voting_escrow(VotingEscrow, accounts, token):
 
 
 @pytest.fixture(scope="module")
+def voting_escrow_naive(VotingEscrowNaive, accounts, token):
+    contract = VotingEscrowNaive.deploy({'from': accounts[0]})
+    contract.initialize(
+        token,
+        "Voting-escrowed CRV",
+        "veCRV",
+        "veCRV_0.99",
+        18,  # decimals
+        10,  # max_pool_members
+        1e18,  # min_stake_amount
+        60,  # _minLockTime
+        {"from": accounts[0]}
+    )
+    yield contract
+
+
+@pytest.fixture(scope="module")
 def gauge_controller(GaugeController, accounts, token, voting_escrow):
     yield GaugeController.deploy(token, voting_escrow, {"from": accounts[0]})
 

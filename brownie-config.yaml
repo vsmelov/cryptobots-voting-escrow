@@ -18,6 +18,7 @@ compiler:
             enabled: true
         remappings:
             - "@openzeppelin=OpenZeppelin/openzeppelin-contracts@4.3.3"
+            - "@openzeppelin-upgradeable=OpenZeppelin/openzeppelin-contracts-upgradeable@4.3.3"
     vyper:
         version: 0.3.7
 
@@ -25,3 +26,4 @@ autofetch_sources: True
 dependencies:
   - curvefi/curve-crypto-contract@1.0.0
   - OpenZeppelin/openzeppelin-contracts@4.3.3
+  - OpenZeppelin/openzeppelin-contracts-upgradeable@4.3.3
