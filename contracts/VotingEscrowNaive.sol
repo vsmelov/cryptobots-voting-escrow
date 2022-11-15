@@ -14,9 +14,50 @@ contract VotingEscrowNaive is OwnableUpgradeable {
         uint256 till;
     }
 
+    event CreateLock(
+        address indexed provider,
+        address indexed account,
+        uint256 value,
+        uint256 indexed locktime
+    );
+
+    event IncreaseLockAmount(
+        address indexed provider,
+        address indexed account,
+        uint256 value
+    );
+
+    event IncreaseUnlockTime(
+        address indexed account,
+        uint256 indexed locktime
+    );
+
+    event Withdraw(
+        address indexed account,
+        uint256 value
+    );
+
     event MinLockTimeSet(uint256 value);
     event MinLockAmountSet(uint256 value);
     event MaxPoolMembersSet(uint256 value);
+    event IncreaseAmountDisabledSet(bool value);
+    event IncreaseUnlockTimeDisabledSet(bool value);
+    event CreateLockDisabledSet(bool value);
+    event WithdrawDisabledSet(bool value);
+    event ClaimRewardsDisabledSet(bool value);
+    event Emergency();
+    event WindowRewardReceived(
+        uint256 indexed window,
+        address indexed token,
+        uint256 amount
+    );
+    event UserRewardsClaimed(
+        address indexed user,
+        uint256 first_processed_window,
+        uint256 last_processed_window,
+        uint256 totalRewards_MATIC,
+        uint256 totalRewards_BITS
+    );
 
     uint256 public constant MAXTIME = 4 * 360 * 24 * 3600;
     uint256 public constant WINDOW = 30 * 24 * 3600;
@@ -29,10 +70,18 @@ contract VotingEscrowNaive is OwnableUpgradeable {
     uint256 public maxPoolMembers;
     uint256 public poolMembers;
 
+
+    bool public emergency;
+    bool public increase_amount_disabled;
+    bool public increase_unlock_time_disabled;
+    bool public create_lock_disabled;
+    bool public withdraw_disabled;
+    bool public claim_rewards_disabled;
+
     string public name;
     string public symbol;
     string public version;
-    uint8 public decimals;
+    uint8 constant public decimals = 18;
 
     mapping (uint256 /*window*/ => uint256) public windowTotalSupply;
     mapping (address /*user*/ => mapping (uint256 /*window*/ => uint256 /*balance*/)) public userWindowBalance;
@@ -51,6 +100,42 @@ contract VotingEscrowNaive is OwnableUpgradeable {
         return getWindow(block.timestamp);
     }
 
+    function enableEmergency() external onlyOwner {
+        require(!emergency, "already emergency");
+        emergency = true;
+        emit Emergency();
+    }
+
+    function set_increase_amount_disabled(bool _value) external onlyOwner {
+        require(increase_amount_disabled != _value, "not changed");
+        increase_amount_disabled = _value;
+        emit IncreaseAmountDisabledSet(_value);
+    }
+
+    function set_increase_unlock_time_disabled(bool _value) external onlyOwner {
+        require(increase_unlock_time_disabled != _value, "not changed");
+        increase_unlock_time_disabled = _value;
+        emit IncreaseUnlockTimeDisabledSet(_value);
+    }
+
+    function set_claim_rewards_disabled(bool _value) external onlyOwner {
+        require(claim_rewards_disabled != _value, "not changed");
+        claim_rewards_disabled = _value;
+        emit ClaimRewardsDisabledSet(_value);
+    }
+
+    function set_create_lock_disabled(bool _value) external onlyOwner {
+        require(create_lock_disabled != _value, "not changed");
+        create_lock_disabled = _value;
+        emit CreateLockDisabledSet(_value);
+    }
+
+    function set_withdraw_disabled(bool _value) external onlyOwner {
+        require(withdraw_disabled != _value, "not changed");
+        withdraw_disabled = _value;
+        emit WithdrawDisabledSet(_value);
+    }
+
     constructor() {}
 
     function initialize(
@@ -58,7 +143,6 @@ contract VotingEscrowNaive is OwnableUpgradeable {
         string memory _name,
         string memory _symbol,
         string memory _version,
-        uint8 _decimals,
         uint256 _maxPoolMembers,
         uint256 _minLockAmount,
         uint256 _minLockTime
@@ -99,7 +183,17 @@ contract VotingEscrowNaive is OwnableUpgradeable {
     }
 
     function create_lock(uint256 amount, uint256 till) external {
-        require(locks[msg.sender].amount == 0, "already locked");
+        _create_lock(msg.sender, amount, till);
+    }
+
+    function create_lock_for(address user, uint256 amount, uint256 till) external onlyOwner {
+        _create_lock(user, amount, till);
+    }
+
+    function _create_lock(address user, uint256 amount, uint256 till) internal {
+        require(!emergency, "emergency");
+        require(!create_lock_disabled, "disabled");
+        require(locks[user].amount == 0, "already locked");
         require(amount > 0, "zero amount");
         require(amount >= minLockAmount, "small amount");
 
@@ -113,23 +207,32 @@ contract VotingEscrowNaive is OwnableUpgradeable {
         uint256 scaledAmount = amount * period / MAXTIME;
 
         windowTotalSupply[_currentWindow] += scaledAmount;
-        userWindowBalance[msg.sender][_currentWindow] = scaledAmount;
-        userLastClaimedWindow[msg.sender] = _currentWindow;
-        userLastClaimedRewardPerToken_MATIC[msg.sender] = windowRewardPerToken_MATIC[_currentWindow];
-        userLastClaimedRewardPerToken_BITS[msg.sender] = windowRewardPerToken_BITS[_currentWindow];
+        userWindowBalance[user][_currentWindow] = scaledAmount;
+        userLastClaimedWindow[user] = _currentWindow;
+        userLastClaimedRewardPerToken_MATIC[user] = windowRewardPerToken_MATIC[_currentWindow];
+        userLastClaimedRewardPerToken_BITS[user] = windowRewardPerToken_BITS[_currentWindow];
 
         for (uint256 _window = _currentWindow + WINDOW; _window < till; _window += WINDOW) {
             uint256 _windowScaledAmount = scaledAmount * (till - _window) / period;
             windowTotalSupply[_window] += _windowScaledAmount;
-            userWindowBalance[msg.sender][_window] = _windowScaledAmount;
+            userWindowBalance[user][_window] = _windowScaledAmount;
         }
 
         poolMembers += 1;
-        locks[msg.sender] = UserLock(amount, till);
-        bits.safeTransferFrom(msg.sender, address(this), amount);
+        require(poolMembers <= maxPoolMembers, "max pool members exceed");
+        locks[user] = UserLock(amount, till);
+        emit CreateLock({
+            provider: msg.sender,
+            account: user,
+            value: amount,
+            locktime: till
+        });
+        bits.safeTransferFrom(msg.sender, address(this), amount);  // note: transferred from msg.sender
     }
 
     function increase_unlock_time(uint256 till) external {
+        require(!emergency, "emergency");
+        require(!increase_unlock_time_disabled, "disabled");
         UserLock memory lock = locks[msg.sender];
         require(lock.amount > 0, "nothing locked");
 
@@ -164,10 +267,24 @@ contract VotingEscrowNaive is OwnableUpgradeable {
         }
 
         locks[msg.sender].till = till;
+        emit IncreaseUnlockTime({
+            account: msg.sender,
+            locktime: till
+        });
+    }
+
+    function increase_lock_amount_for(address user, uint256 amount) external onlyOwner {
+        _increase_lock_amount(user, amount);
     }
 
     function increase_lock_amount(uint256 amount) external {
-        UserLock memory lock = locks[msg.sender];
+        _increase_lock_amount(msg.sender, amount);
+    }
+
+    function _increase_lock_amount(address user, uint256 amount) internal {
+        require(!emergency, "emergency");
+        require(!increase_amount_disabled, "disabled");
+        UserLock memory lock = locks[user];
         require(lock.amount > 0, "nothing locked");
         require(amount > 0, "zero amount");
         require(amount >= minLockAmount, "small amount");
@@ -183,27 +300,43 @@ contract VotingEscrowNaive is OwnableUpgradeable {
         uint256 scaledAmount = amount * period / MAXTIME;
 
         windowTotalSupply[_currentWindow] += scaledAmount;
-        userWindowBalance[msg.sender][_currentWindow] += scaledAmount;
+        userWindowBalance[user][_currentWindow] += scaledAmount;
 
         // not need because claim_rewards is already called
-//        userLastClaimedWindow[msg.sender] = _currentWindow;
-//        userLastClaimedRewardPerToken_MATIC[msg.sender] = windowRewardPerToken_MATIC[_currentWindow];
-//        userLastClaimedRewardPerToken_BITS[msg.sender] = windowRewardPerToken_BITS[_currentWindow];
+//        userLastClaimedWindow[user] = _currentWindow;
+//        userLastClaimedRewardPerToken_MATIC[user] = windowRewardPerToken_MATIC[_currentWindow];
+//        userLastClaimedRewardPerToken_BITS[user] = windowRewardPerToken_BITS[_currentWindow];
 
         for (uint256 _window = _currentWindow + WINDOW; _window < lock.till; _window += WINDOW) {
             uint256 _windowScaledAmount = scaledAmount * (lock.till - _window) / period;
             windowTotalSupply[_window] += _windowScaledAmount;
-            userWindowBalance[msg.sender][_window] += _windowScaledAmount;
+            userWindowBalance[user][_window] += _windowScaledAmount;
         }
 
-        locks[msg.sender].amount += amount;
-        bits.safeTransferFrom(msg.sender, address(this), amount);
+        locks[user].amount += amount;
+        emit IncreaseLockAmount({
+            provider: msg.sender,
+            account: user,
+            value: amount
+        });
+        bits.safeTransferFrom(msg.sender, address(this), amount);  // note: transferred from msg.sender
     }
 
     function withdraw() external {
         UserLock memory lock = locks[msg.sender];
         require(lock.amount != 0, "nothing locked");
         require(block.timestamp >= lock.till, "too early");
+
+        if (emergency) {
+            // erase storage
+            locks[msg.sender] = UserLock(0, 0);
+            userLastClaimedWindow[msg.sender] = 0;
+            userLastClaimedRewardPerToken_BITS[msg.sender] = 0;
+            userLastClaimedRewardPerToken_MATIC[msg.sender] = 0;
+            emit Withdraw(msg.sender, lock.amount);
+            bits.safeTransfer(msg.sender, lock.amount);
+            return;
+        }
 
         claim_rewards();
 
@@ -214,10 +347,16 @@ contract VotingEscrowNaive is OwnableUpgradeable {
         userLastClaimedRewardPerToken_MATIC[msg.sender] = 0;
         poolMembers -= 1;
 
+        emit Withdraw(msg.sender, lock.amount);
         bits.safeTransfer(msg.sender, lock.amount);
     }
 
-    function user_claimable_rewards(address user) public view returns(uint256 totalRewards_MATIC, uint256 totalRewards_BITS){
+    function user_claimable_rewards(
+        address user
+    ) public view returns(
+        uint256 totalRewards_MATIC,
+        uint256 totalRewards_BITS
+    ) {
         UserLock memory lock = locks[user];
         require(lock.amount > 0, "nothing lock");
         uint256 _currentWindow = currentWindow();
@@ -228,7 +367,7 @@ contract VotingEscrowNaive is OwnableUpgradeable {
         for(
             uint256 _processingWindow = _startWindow;
             _processingWindow <= _currentWindow;
-            _processingWindow += 0
+            _processingWindow += WINDOW
         ) {
             uint256 _userWindowBalance = userWindowBalance[user][_processingWindow];
             uint256 reward_MATIC;
@@ -252,9 +391,18 @@ contract VotingEscrowNaive is OwnableUpgradeable {
     }
 
     function claim_rewards() public {
+        require(!emergency, "emergency");
+        require(!claim_rewards_disabled, "disabled");
         (uint256 totalRewards_MATIC, uint256 totalRewards_BITS) = user_claimable_rewards(msg.sender);
 
         uint256 _currentWindow = currentWindow();
+        emit UserRewardsClaimed({
+            user: msg.sender,
+            first_processed_window: userLastClaimedWindow[msg.sender],
+            last_processed_window: _currentWindow,
+            totalRewards_MATIC: totalRewards_MATIC,
+            totalRewards_BITS: totalRewards_BITS
+        });
         userLastClaimedWindow[msg.sender] = _currentWindow;
         userLastClaimedRewardPerToken_MATIC[msg.sender] = windowRewardPerToken_MATIC[_currentWindow];
         userLastClaimedRewardPerToken_BITS[msg.sender] = windowRewardPerToken_BITS[_currentWindow];
@@ -286,6 +434,7 @@ contract VotingEscrowNaive is OwnableUpgradeable {
         uint256 _windowTotalSupply = windowTotalSupply[_currentWindow];
         require(_windowTotalSupply != 0, "no pool members");
         windowRewardPerToken_BITS[_currentWindow] += amount * ONE / _windowTotalSupply;
+        emit WindowRewardReceived(_currentWindow, address(bits), amount);
         bits.safeTransferFrom(msg.sender, address(this), amount);
     }
 
@@ -293,6 +442,7 @@ contract VotingEscrowNaive is OwnableUpgradeable {
         uint256 _currentWindow = currentWindow();
         uint256 _windowTotalSupply = windowTotalSupply[_currentWindow];
         require(_windowTotalSupply != 0, "no pool members");
+        emit WindowRewardReceived(_currentWindow, address(0), amount);
         windowRewardPerToken_MATIC[_currentWindow] += msg.value * ONE / _windowTotalSupply;
     }
 }

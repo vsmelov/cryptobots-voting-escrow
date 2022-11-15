@@ -177,7 +177,6 @@ def set_create_lock_disabled(_value: bool):
     )
 
 
-
 @external
 def set_increase_amount_disabled(_value: bool):
     raw_call(

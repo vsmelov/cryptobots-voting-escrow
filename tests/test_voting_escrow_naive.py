@@ -1,3 +1,4 @@
+from pytest import approx
 import time
 
 import brownie
@@ -30,7 +31,17 @@ def test_share_rewards_2users_same_time_deposit(web3, chain, accounts, token, vo
     token.approve(voting_escrow, reward_amount)
     tx = voting_escrow.receiveReward_BITS(reward_amount, {"from": payer})
 
-    claimable = voting_escrow.user_claimable_rewards(user1)
-    claim_tx1 = voting_escrow.claim_rewards(token, {"from": user1})
+    (totalRewards_MATIC1, totalRewards_BITS1) = voting_escrow.user_claimable_rewards(user1)
+    claim_tx1 = voting_escrow.claim_rewards({"from": user1})
+    (totalRewards_MATIC2, totalRewards_BITS2) = voting_escrow.user_claimable_rewards(user2)
+    claim_tx2 = voting_escrow.claim_rewards({"from": user2})
 
-    claim_tx2 = voting_escrow.claim_rewards(token, {"from": user2})
+    reward1 = claim_tx1.events['UserRewardsClaimed']['totalRewards_BITS']
+    reward2 = claim_tx2.events['UserRewardsClaimed']['totalRewards_BITS']
+
+    assert reward1 == totalRewards_BITS1
+    assert reward2 == totalRewards_BITS2
+
+    assert int(reward1 + reward2) == approx(reward_amount)
+    assert int(reward1) == approx(reward_amount * user1_deposit_amount / (user1_deposit_amount + user2_deposit_amount))
+    assert int(reward2) == approx(reward_amount * user2_deposit_amount / (user1_deposit_amount + user2_deposit_amount))

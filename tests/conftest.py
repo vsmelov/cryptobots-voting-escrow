@@ -124,7 +124,6 @@ def voting_escrow_naive(VotingEscrowNaive, accounts, token):
         "Voting-escrowed CRV",
         "veCRV",
         "veCRV_0.99",
-        18,  # decimals
         10,  # max_pool_members
         1e18,  # min_stake_amount
         60,  # _minLockTime
