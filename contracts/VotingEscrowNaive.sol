@@ -85,7 +85,7 @@ contract VotingEscrowNaive is OwnableUpgradeable {
     );
     event RewardTokenAdded(address indexed token);
 
-    uint256 public constant MAXTIME = 4 * 360 * 24 * 3600;
+    uint256 public constant MAXTIME = 4 * 360 * 24 * 3600;  // todo (3*365 + 366)
     uint256 public constant WINDOW = 30 * 24 * 3600;
     uint256 internal constant ONE = 10**18;
     IERC20 public bits;
