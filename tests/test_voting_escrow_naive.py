@@ -31,9 +31,9 @@ def test_share_rewards_2users_same_time_deposit(web3, chain, accounts, token, vo
     token.approve(voting_escrow, reward_amount)
     tx = voting_escrow.receiveReward(token, reward_amount, {"from": payer})
 
-    totalRewards_BITS1 = voting_escrow.user_claimable_rewards(user1, token)
+    totalRewards_BITS1 = voting_escrow.user_token_claimable_rewards(user1, token)
     claim_tx1 = voting_escrow.claim_rewards(token, {"from": user1})
-    totalRewards_BITS2 = voting_escrow.user_claimable_rewards(user2, token)
+    totalRewards_BITS2 = voting_escrow.user_token_claimable_rewards(user2, token)
     claim_tx2 = voting_escrow.claim_rewards(token, {"from": user2})
 
     reward1 = claim_tx1.events['UserRewardsClaimed']['totalRewards']
