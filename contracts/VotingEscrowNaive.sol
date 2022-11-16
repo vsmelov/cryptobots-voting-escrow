@@ -4,10 +4,12 @@ pragma solidity ^0.8.0;
 
 import {SafeERC20} from '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
 import {IERC20} from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
+import {EnumerableSet} from '@openzeppelin/contracts/utils/structs/EnumerableSet.sol';
 import {OwnableUpgradeable} from '@openzeppelin-upgradeable/contracts/access/OwnableUpgradeable.sol';
 
 contract VotingEscrowNaive is OwnableUpgradeable {
     using SafeERC20 for IERC20;
+    using EnumerableSet for EnumerableSet.AddressSet;
 
     struct UserLock {
         uint256 amount;
@@ -53,11 +55,35 @@ contract VotingEscrowNaive is OwnableUpgradeable {
     );
     event UserRewardsClaimed(
         address indexed user,
+        address indexed token,
         uint256 first_processed_window,
         uint256 last_processed_window,
-        uint256 totalRewards_MATIC,
-        uint256 totalRewards_BITS
+        uint256 totalRewards
     );
+    event WindowRewardClaimed(
+        address indexed account,
+        uint256 indexed window,
+        uint256 userWindowBalance,
+        uint256 windowRewardPerToken,
+        uint256 lastClaimedRewardPerToken,
+        uint256 reward
+    );
+    event TransferNative(
+        address indexed from,
+        address indexed to,
+        uint256 amount
+    );
+    event StuckRewardReceived(
+        uint256 indexed window,
+        address indexed token,
+        uint256 amount
+    );
+    event StuckWindowRewardClaimed(
+        uint256 indexed window,
+        address indexed token,
+        uint256 stuckAmount
+    );
+    event RewardTokenAdded(address indexed token);
 
     uint256 public constant MAXTIME = 4 * 360 * 24 * 3600;
     uint256 public constant WINDOW = 30 * 24 * 3600;
@@ -70,7 +96,6 @@ contract VotingEscrowNaive is OwnableUpgradeable {
     uint256 public maxPoolMembers;
     uint256 public poolMembers;
 
-
     bool public emergency;
     bool public increase_amount_disabled;
     bool public increase_unlock_time_disabled;
@@ -81,16 +106,30 @@ contract VotingEscrowNaive is OwnableUpgradeable {
     string public name;
     string public symbol;
     string public version;
-    uint8 constant public decimals = 18;
+    uint8 constant public decimals = 18;  // same decimals as in BITS
 
     mapping (uint256 /*window*/ => uint256) public windowTotalSupply;
     mapping (address /*user*/ => mapping (uint256 /*window*/ => uint256 /*balance*/)) public userWindowBalance;
-    mapping (address /*user*/ => uint256 /*window*/) public userLastClaimedWindow;
-    mapping (uint256 /*window*/ => uint256 /*rewardPerToken*/) public windowRewardPerToken_MATIC;
-    mapping (uint256 /*window*/ => uint256 /*rewardPerToken*/) public windowRewardPerToken_BITS;
-    mapping (address /*user*/ => uint256) public userLastClaimedRewardPerToken_MATIC;
-    mapping (address /*user*/ => uint256) public userLastClaimedRewardPerToken_BITS;
-//    mapping (uint256 /*window*/ => bool) public stuckWindowRewardClaimed;
+    mapping (address /*user*/ => uint256 /*window*/) public defaultUserTokenLastClaimedWindow;
+    mapping (address /*user*/ => mapping (address /*token*/ => uint256 /*window*/)) public userTokenLastClaimedWindow;
+    mapping (uint256 /*window*/ => mapping(address /*token*/ => uint256 /*rewardPerToken*/)) public windowRewardPerToken;
+    mapping (address /*user*/ => mapping(address /*token*/ => uint256)) public userTokenLastClaimedRewardPerToken;
+    mapping (uint256 /*window*/ => mapping(address /*token*/ => uint256)) public windowTokenStuckAmount;
+    EnumerableSet.AddressSet internal _rewardTokens;
+
+    function rewardTokensLength() external view returns(uint256 length) {
+        length = _rewardTokens.length();
+    }
+
+    function rewardTokenAt(uint256 index) external view returns(address token) {
+        token = _rewardTokens.at(index);
+    }
+
+    function addRewardToken(address token) external onlyOwner {
+        require(_rewardTokens.add(token), "already in");
+        emit RewardTokenAdded(token);
+    }
+    // note: removal are not allowed!
 
     function getWindow(uint256 timestamp) public pure returns(uint256) {
         return timestamp / WINDOW * WINDOW;
@@ -208,9 +247,11 @@ contract VotingEscrowNaive is OwnableUpgradeable {
 
         windowTotalSupply[_currentWindow] += scaledAmount;
         userWindowBalance[user][_currentWindow] = scaledAmount;
-        userLastClaimedWindow[user] = _currentWindow;
-        userLastClaimedRewardPerToken_MATIC[user] = windowRewardPerToken_MATIC[_currentWindow];
-        userLastClaimedRewardPerToken_BITS[user] = windowRewardPerToken_BITS[_currentWindow];
+        defaultUserTokenLastClaimedWindow[user] = _currentWindow;
+        for (uint256 rewardTokenIndex = 0; rewardTokenIndex < _rewardTokens.length(); rewardTokenIndex += 1) {
+            address rewardToken = _rewardTokens.at(rewardTokenIndex);
+            userTokenLastClaimedRewardPerToken[user][rewardToken] = windowRewardPerToken[_currentWindow][rewardToken];
+        }
 
         for (uint256 _window = _currentWindow + WINDOW; _window < till; _window += WINDOW) {
             uint256 _windowScaledAmount = scaledAmount * (till - _window) / period;
@@ -253,11 +294,6 @@ contract VotingEscrowNaive is OwnableUpgradeable {
         windowTotalSupply[_currentWindow] =
             windowTotalSupply[_currentWindow] - userWindowBalance[msg.sender][_currentWindow] + scaledAmount;
         userWindowBalance[msg.sender][_currentWindow] = scaledAmount;
-
-        // this not need because claim_rewards already called
-//        userLastClaimedWindow[msg.sender] = _currentWindow;
-//        userLastClaimedRewardPerToken_MATIC[msg.sender] = windowRewardPerToken_MATIC[_currentWindow];
-//        userLastClaimedRewardPerToken_BITS[msg.sender] = windowRewardPerToken_BITS[_currentWindow];
 
         for (uint256 _window = _currentWindow + WINDOW; _window < till; _window += WINDOW) {
             uint256 _windowScaledAmount = scaledAmount * (till - _window) / period;
@@ -302,11 +338,6 @@ contract VotingEscrowNaive is OwnableUpgradeable {
         windowTotalSupply[_currentWindow] += scaledAmount;
         userWindowBalance[user][_currentWindow] += scaledAmount;
 
-        // not need because claim_rewards is already called
-//        userLastClaimedWindow[user] = _currentWindow;
-//        userLastClaimedRewardPerToken_MATIC[user] = windowRewardPerToken_MATIC[_currentWindow];
-//        userLastClaimedRewardPerToken_BITS[user] = windowRewardPerToken_BITS[_currentWindow];
-
         for (uint256 _window = _currentWindow + WINDOW; _window < lock.till; _window += WINDOW) {
             uint256 _windowScaledAmount = scaledAmount * (lock.till - _window) / period;
             windowTotalSupply[_window] += _windowScaledAmount;
@@ -330,9 +361,6 @@ contract VotingEscrowNaive is OwnableUpgradeable {
         if (emergency) {
             // erase storage
             locks[msg.sender] = UserLock(0, 0);
-            userLastClaimedWindow[msg.sender] = 0;
-            userLastClaimedRewardPerToken_BITS[msg.sender] = 0;
-            userLastClaimedRewardPerToken_MATIC[msg.sender] = 0;
             emit Withdraw(msg.sender, lock.amount);
             bits.safeTransfer(msg.sender, lock.amount);
             return;
@@ -342,9 +370,12 @@ contract VotingEscrowNaive is OwnableUpgradeable {
 
         // erase storage
         locks[msg.sender] = UserLock(0, 0);
-        userLastClaimedWindow[msg.sender] = 0;
-        userLastClaimedRewardPerToken_BITS[msg.sender] = 0;
-        userLastClaimedRewardPerToken_MATIC[msg.sender] = 0;
+        defaultUserTokenLastClaimedWindow[msg.sender] = 0;
+        for (uint256 rewardTokenIndex = 0; rewardTokenIndex < _rewardTokens.length(); rewardTokenIndex += 1) {
+            address rewardToken = _rewardTokens.at(rewardTokenIndex);
+            userTokenLastClaimedRewardPerToken[msg.sender][rewardToken] = 0;
+            userTokenLastClaimedWindow[msg.sender][rewardToken] = 0;
+        }
         poolMembers -= 1;
 
         emit Withdraw(msg.sender, lock.amount);
@@ -352,97 +383,139 @@ contract VotingEscrowNaive is OwnableUpgradeable {
     }
 
     function user_claimable_rewards(
-        address user
+        address user,
+        address _token
     ) public view returns(
-        uint256 totalRewards_MATIC,
-        uint256 totalRewards_BITS
+        uint256 totalRewards
     ) {
         UserLock memory lock = locks[user];
         require(lock.amount > 0, "nothing lock");
         uint256 _currentWindow = currentWindow();
 
-        totalRewards_MATIC = 0;
-        totalRewards_BITS = 0;
-        uint256 _startWindow = userLastClaimedWindow[user];
+        totalRewards = 0;
+        uint256 _startWindow = userTokenLastClaimedWindow[user][_token];
+        if (_startWindow == 0) _startWindow = defaultUserTokenLastClaimedWindow[user];
+
         for(
             uint256 _processingWindow = _startWindow;
             _processingWindow <= _currentWindow;
             _processingWindow += WINDOW
         ) {
             uint256 _userWindowBalance = userWindowBalance[user][_processingWindow];
-            uint256 reward_MATIC;
-            uint256 reward_BITS;
-            uint256 _windowRewardPerToken_MATIC = windowRewardPerToken_MATIC[_processingWindow];
-            uint256 _windowRewardPerToken_BITS = windowRewardPerToken_BITS[_processingWindow];
+            uint256 reward;
+            uint256 _windowRewardPerToken = windowRewardPerToken[_processingWindow][_token];
 
             if (_processingWindow == _startWindow) {
-                uint256 _lastClaimedRewardPerToken_MATIC = userLastClaimedRewardPerToken_MATIC[user];
-                uint256 _lastClaimedRewardPerToken_BITS = userLastClaimedRewardPerToken_BITS[user];
-                reward_MATIC = _userWindowBalance * (_windowRewardPerToken_MATIC - _lastClaimedRewardPerToken_MATIC) / ONE;
-                reward_BITS = _userWindowBalance * (_windowRewardPerToken_BITS - _lastClaimedRewardPerToken_BITS) / ONE;
+                uint256 _lastClaimedRewardPerToken = userTokenLastClaimedRewardPerToken[user][_token];
+                reward = _userWindowBalance * (_windowRewardPerToken - _lastClaimedRewardPerToken) / ONE;
+//                emit WindowRewardClaimed({
+//                    account: user,
+//                    window: _processingWindow,
+//                    userWindowBalance: _userWindowBalance,
+//                    windowRewardPerToken: _windowRewardPerToken,
+//                    lastClaimedRewardPerToken: _lastClaimedRewardPerToken,
+//                    reward: reward
+//                });
             } else {
-                reward_MATIC = _userWindowBalance * _windowRewardPerToken_MATIC / ONE;
-                reward_BITS = _userWindowBalance * _windowRewardPerToken_BITS / ONE;
+                reward = _userWindowBalance * _windowRewardPerToken / ONE;
+//                emit WindowRewardClaimed({
+//                    account: user,
+//                    window: _processingWindow,
+//                    userWindowBalance: _userWindowBalance,
+//                    windowRewardPerToken: _windowRewardPerToken,
+//                    lastClaimedRewardPerToken: 0,
+//                    reward: reward
+//                });
             }
-
-            totalRewards_MATIC += reward_MATIC;
-            totalRewards_BITS += reward_BITS;
+            totalRewards += reward;
         }
     }
 
     function claim_rewards() public {
+        for (uint256 rewardTokenIndex = 0; rewardTokenIndex < _rewardTokens.length(); rewardTokenIndex += 1) {
+            address rewardToken = _rewardTokens.at(rewardTokenIndex);
+            claim_rewards(rewardToken);
+        }
+    }
+
+    function claim_rewards(address _token) public {
         require(!emergency, "emergency");
         require(!claim_rewards_disabled, "disabled");
-        (uint256 totalRewards_MATIC, uint256 totalRewards_BITS) = user_claimable_rewards(msg.sender);
+        uint256 totalRewards = user_claimable_rewards(msg.sender, _token);
 
         uint256 _currentWindow = currentWindow();
         emit UserRewardsClaimed({
             user: msg.sender,
-            first_processed_window: userLastClaimedWindow[msg.sender],
+            token: _token,
+            first_processed_window: userTokenLastClaimedWindow[msg.sender][_token],
             last_processed_window: _currentWindow,
-            totalRewards_MATIC: totalRewards_MATIC,
-            totalRewards_BITS: totalRewards_BITS
+            totalRewards: totalRewards
         });
-        userLastClaimedWindow[msg.sender] = _currentWindow;
-        userLastClaimedRewardPerToken_MATIC[msg.sender] = windowRewardPerToken_MATIC[_currentWindow];
-        userLastClaimedRewardPerToken_BITS[msg.sender] = windowRewardPerToken_BITS[_currentWindow];
-
-        bits.safeTransfer(msg.sender, totalRewards_BITS);
-        (bool success, ) = msg.sender.call{value: totalRewards_MATIC}("");
-        require(success, "transfer MATIC failed");
+        userTokenLastClaimedWindow[msg.sender][_token] = _currentWindow;
+        userTokenLastClaimedRewardPerToken[msg.sender][_token] = windowRewardPerToken[_currentWindow][_token];
+        _anyTransfer({
+            token: _token,
+            to: msg.sender,
+            amount: totalRewards
+        });
     }
 
-//    function claim_stuck_rewards(uint256 _window) external onlyOwner {
-//        require(_window < _currentWindow(), "unfinalized window");
-//        require(!stuckWindowRewardClaimed[_window], "already claimed");
-//        stuckWindowRewardClaimed[_window] = True;
-//
-//        _windowReward: uint256 = self.window_token_rewards[_window][_token]
-//        if _windowReward == 0:
-//            log Log1Args("skip _window {0} because _windowReward=0", _window)
-//            return
-//
-//        _avgTotalSupply: uint256 = self._averageTotalSupplyOverWindow(_window)
-//        assert _avgTotalSupply == 0, "reward not stuck"
-//
-//        log StuckWindowRewardClaimed(_window, _token, _windowReward)
-//        self.any_transfer(_token, msg.sender, _windowReward)
-//    }
-
-    function receiveReward_BITS(uint256 amount) external {
-        uint256 _currentWindow = currentWindow();
-        uint256 _windowTotalSupply = windowTotalSupply[_currentWindow];
-        require(_windowTotalSupply != 0, "no pool members");
-        windowRewardPerToken_BITS[_currentWindow] += amount * ONE / _windowTotalSupply;
-        emit WindowRewardReceived(_currentWindow, address(bits), amount);
-        bits.safeTransferFrom(msg.sender, address(this), amount);
+    function _anyTransfer(address token, address to, uint256 amount) internal {
+        if (token == address(0)) {
+            emit TransferNative(address(this), to, amount);
+            (bool success, ) = to.call{value: amount}("");
+            require(success, "transfer native failed");
+        } else {
+            IERC20(token).safeTransfer(to, amount);
+        }
     }
 
-    function receiveReward_MATIC(uint256 amount) external payable {
+    function claim_stuck_rewards(uint256 _window, address _token) external onlyOwner {
+        uint256 stuckAmount = windowTokenStuckAmount[_window][_token];
+        require(stuckAmount > 0, "no stuck reward");
+        windowTokenStuckAmount[_window][_token] = 0;
+        emit StuckWindowRewardClaimed({
+            window: _window,
+            token: _token,
+            stuckAmount: stuckAmount
+        });
+        _anyTransfer({
+            token: _token,
+            to: msg.sender,
+            amount: stuckAmount
+        });
+    }
+
+    function receiveReward(address token, uint256 amount) external {
         uint256 _currentWindow = currentWindow();
         uint256 _windowTotalSupply = windowTotalSupply[_currentWindow];
-        require(_windowTotalSupply != 0, "no pool members");
-        emit WindowRewardReceived(_currentWindow, address(0), amount);
-        windowRewardPerToken_MATIC[_currentWindow] += msg.value * ONE / _windowTotalSupply;
+        if (_windowTotalSupply == 0) {
+            windowTokenStuckAmount[_currentWindow][token] += amount;
+            emit StuckRewardReceived({
+                window: _currentWindow,
+                token: token,
+                amount: amount
+            });
+        } else {
+            windowRewardPerToken[_currentWindow][token] += amount * ONE / _windowTotalSupply;
+        }
+        emit WindowRewardReceived(_currentWindow, token, amount);
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+    }
+
+    function receiveNativeReward() external payable {
+        uint256 _currentWindow = currentWindow();
+        uint256 _windowTotalSupply = windowTotalSupply[_currentWindow];
+        if (_windowTotalSupply == 0) {
+            windowTokenStuckAmount[_currentWindow][address(0)] += msg.value;
+            emit StuckRewardReceived({
+                window: _currentWindow,
+                token: address(0),
+                amount: msg.value
+            });
+        } else {
+            windowRewardPerToken[_currentWindow][address(0)] += msg.value * ONE / _windowTotalSupply;
+        }
+        emit WindowRewardReceived(_currentWindow, address(0), msg.value);
     }
 }

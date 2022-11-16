@@ -29,15 +29,15 @@ def test_share_rewards_2users_same_time_deposit(web3, chain, accounts, token, vo
     tx_lock_user2 = voting_escrow.create_lock(user2_deposit_amount, user2_deposit_till, {"from": user2})
 
     token.approve(voting_escrow, reward_amount)
-    tx = voting_escrow.receiveReward_BITS(reward_amount, {"from": payer})
+    tx = voting_escrow.receiveReward(token, reward_amount, {"from": payer})
 
-    (totalRewards_MATIC1, totalRewards_BITS1) = voting_escrow.user_claimable_rewards(user1)
-    claim_tx1 = voting_escrow.claim_rewards({"from": user1})
-    (totalRewards_MATIC2, totalRewards_BITS2) = voting_escrow.user_claimable_rewards(user2)
-    claim_tx2 = voting_escrow.claim_rewards({"from": user2})
+    totalRewards_BITS1 = voting_escrow.user_claimable_rewards(user1, token)
+    claim_tx1 = voting_escrow.claim_rewards(token, {"from": user1})
+    totalRewards_BITS2 = voting_escrow.user_claimable_rewards(user2, token)
+    claim_tx2 = voting_escrow.claim_rewards(token, {"from": user2})
 
-    reward1 = claim_tx1.events['UserRewardsClaimed']['totalRewards_BITS']
-    reward2 = claim_tx2.events['UserRewardsClaimed']['totalRewards_BITS']
+    reward1 = claim_tx1.events['UserRewardsClaimed']['totalRewards']
+    reward2 = claim_tx2.events['UserRewardsClaimed']['totalRewards']
 
     assert reward1 == totalRewards_BITS1
     assert reward2 == totalRewards_BITS2
